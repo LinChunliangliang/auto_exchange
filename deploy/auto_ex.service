@@ -1,0 +1,28 @@
+[Unit]
+Description=Auto Ex - YBRadar signal-driven trading bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=autoex
+Group=autoex
+WorkingDirectory=/opt/auto_ex
+Environment=PYTHONPATH=/opt/auto_ex/src
+ExecStart=/opt/auto_ex/.venv/bin/python /opt/auto_ex/src/main.py
+Restart=always
+RestartSec=5
+# 崩溃后不断重启但如果 1 分钟内连续崩 5 次以上,大概率是配置错误而不是网络抖动,
+# 先别死循环烧 API 配额,停下来等人工看一眼
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# 加固:限制这个服务能碰到的系统资源范围
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/auto_ex/data
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
