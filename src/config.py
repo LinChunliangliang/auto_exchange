@@ -40,7 +40,6 @@ class Settings:
     leverage: int
     take_profit_pct: float
     stop_loss_pct: float
-    max_hold_seconds: int
     max_concurrent_positions: int
     symbol_cooldown_seconds: int
     max_daily_loss_usdt: float
@@ -60,7 +59,6 @@ def load_settings() -> Settings:
         leverage=_int("LEVERAGE", 2),
         take_profit_pct=_float("TAKE_PROFIT_PCT", 0.015),
         stop_loss_pct=_float("STOP_LOSS_PCT", 0.01),
-        max_hold_seconds=_int("MAX_HOLD_SECONDS", 300),
         max_concurrent_positions=_int("MAX_CONCURRENT_POSITIONS", 3),
         symbol_cooldown_seconds=_int("SYMBOL_COOLDOWN_SECONDS", 1800),
         max_daily_loss_usdt=_float("MAX_DAILY_LOSS_USDT", 100.0),

@@ -42,14 +42,13 @@ def run() -> None:
             log.warning("DRY_RUN 模式清理上次遗留的模拟持仓记录(非真实资金,无影响): %s", stale)
 
     log.info(
-        "参数: poll=%ss size=%.1fUSDT x%d leverage tp=%.2f%% sl=%.2f%% max_hold=%ss max_concurrent=%d "
+        "参数: poll=%ss size=%.1fUSDT x%d leverage tp=%.2f%% sl=%.2f%% max_concurrent=%d "
         "cooldown=%ss daily_loss_limit=%.1fUSDT",
         settings.poll_interval_seconds,
         settings.position_size_usdt,
         settings.leverage,
         settings.take_profit_pct * 100,
         settings.stop_loss_pct * 100,
-        settings.max_hold_seconds,
         settings.max_concurrent_positions,
         settings.symbol_cooldown_seconds,
         settings.max_daily_loss_usdt,

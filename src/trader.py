@@ -123,5 +123,5 @@ def monitor_positions(exchange: Exchange, settings: Settings, state: StateStore)
             _close_and_record(exchange, state, symbol, pos, "止盈")
         elif hit_sl:
             _close_and_record(exchange, state, symbol, pos, "止损")
-        elif time.time() - pos["opened_at"] > settings.max_hold_seconds:
-            _close_and_record(exchange, state, symbol, pos, "超时强平")
+        # 没有超时强平:"舔一口就跑"指的是拿到正确收益就走,不是拿够时间就走,
+        # 没到止盈/止损前就一直持有,哪怕这笔仓位拿得比预期久
