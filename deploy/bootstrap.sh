@@ -77,8 +77,42 @@ systemctl daemon-reload
 systemctl enable auto_ex
 
 echo "== 防火墙:只放行 SSH,其他一律拒绝 =="
-ufw allow OpenSSH || true
-ufw --force enable || true
+# 之前这里直接用 `ufw allow OpenSSH`,这个规则硬编码放行 22 端口,不会读 sshd 实际配置。
+# 如果服务器 SSH 用的是非 22 端口,ufw enable 之后真实端口没被放行,会直接把自己锁在外面。
+# 改成实际探测 sshd 正在监听的端口:优先看运行时真实监听(ss),配置文件解析做兜底。
+detect_ssh_ports() {
+  local ports=""
+  if command -v ss >/dev/null 2>&1; then
+    ports="$(ss -tlnp 2>/dev/null | grep -i sshd | grep -oE ':[0-9]+' | tr -d ':' | sort -u)"
+  fi
+  if [ -z "$ports" ]; then
+    ports="$(grep -rhE '^[[:space:]]*Port[[:space:]]+[0-9]+' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null \
+      | awk '{print $2}' | sort -u)"
+  fi
+  if [ -z "$ports" ]; then
+    ports="22"
+  fi
+  echo "$ports"
+}
+
+SSH_PORTS="$(detect_ssh_ports)"
+PORTS_VALID=true
+for p in $SSH_PORTS; do
+  if ! [[ "$p" =~ ^[0-9]+$ ]]; then
+    PORTS_VALID=false
+  fi
+done
+
+if [ -z "$SSH_PORTS" ] || [ "$PORTS_VALID" = false ]; then
+  echo "!! 无法可靠探测到 SSH 监听端口,为避免把你锁在外面,这次跳过防火墙配置 !!" >&2
+  echo "!! 请手动确认 SSH 端口后自己执行: ufw allow <你的端口>/tcp && ufw enable !!" >&2
+else
+  echo "探测到 SSH 监听端口: $SSH_PORTS(将全部放行)"
+  for p in $SSH_PORTS; do
+    ufw allow "$p"/tcp
+  done
+  ufw --force enable || true
+fi
 
 # .env 是全新拷贝的占位内容(或者还没填 session cookie),先别启动,
 # 避免拿着空密钥/占位符跑起来在日志里刷一堆失败
