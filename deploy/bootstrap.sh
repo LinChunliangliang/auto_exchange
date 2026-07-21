@@ -26,6 +26,11 @@ if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
 fi
 
 echo "== 拉取/更新代码 =="
+# 仓库目录会被 chown 给 autoex 用户,但这里始终用 root 身份跑 git 命令。
+# git 2.35.2+ 默认拒绝对"属主不是当前用户"的仓库做操作(防止多用户系统的安全隐患),
+# 显式加白名单,避免下次更新时报 "detected dubious ownership"
+git config --global --add safe.directory "$APP_DIR"
+
 if [ -d "$APP_DIR/.git" ]; then
   git -C "$APP_DIR" pull --ff-only
 else
