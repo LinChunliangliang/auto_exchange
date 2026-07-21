@@ -4,13 +4,13 @@ YBRadar 信号驱动的币安合约自动交易机器人。
 
 ## 它做什么
 
-- 每隔 `POLL_INTERVAL_SECONDS` 轮询一次 YBRadar 的 `/api/signals`,筛出同时满足以下条件的品种:
+- 每隔 `SIGNAL_POLL_INTERVAL_SECONDS` 轮询一次 YBRadar 的 `/api/signals`,筛出同时满足以下条件的品种:
   - 强信号(🔥 `signalKey=hot`)
   - 当前处于强信号窗口(`strongState=active`)
   - 方向明确(`recDir=long/short`,排除观望)
   - 信号足够新鲜(`strongSince` 距离现在不超过 `MAX_SIGNAL_AGE_SECONDS`,避免追一个已经走完的行情)
 - 命中就在币安 USDⓈ-M 合约按配置的保证金 × 杠杆开市价单
-- 开仓后**不依赖交易所条件单**:实测这个账号的 `STOP_MARKET`/`TAKE_PROFIT_MARKET` 委托会被交易所拒绝(错误码 -4120),所以止盈止损改成机器人自己每轮盯盘标记价格,触发阈值就发市价单平仓
+- 开仓后**不依赖交易所条件单**:实测这个账号的 `STOP_MARKET`/`TAKE_PROFIT_MARKET` 委托会被交易所拒绝(错误码 -4120),所以止盈止损改成机器人自己每隔 `POSITION_MONITOR_INTERVAL_SECONDS` 盯盘一次标记价格,触发阈值就发市价单平仓——盯仓和拉信号是两个独立的节奏,前者查币安自己的 API 可以很快,后者要顾及第三方网站的压力
 - 止盈/止损阈值按**币本位涨跌幅**计算(`entry_price` 直接乘百分比),不受杠杆影响
 - **没有超时强平**:只要没到止盈/止损线就一直持有——"舔一口就跑"指的是拿到正确收益才走,不是拿够时间就走
 
@@ -54,8 +54,9 @@ PYTHONPATH=src python src/main.py
 | 变量 | 说明 |
 |---|---|
 | `YBRADAR_SESSION_COOKIE` | YBRadar 登录态,过期后需要重新登录复制新值 |
-| `POLL_INTERVAL_SECONDS` | 轮询间隔(秒) |
-| `MAX_SIGNAL_AGE_SECONDS` | 信号窗口(`strongSince`)超过这个秒数就不再当新信号处理,默认对齐 YBRadar 自己 3 分钟的扫描周期 |
+| `SIGNAL_POLL_INTERVAL_SECONDS` | 拉取 YBRadar 信号的间隔(秒),默认对齐 YBRadar 自己 3 分钟的扫描周期,没必要拉更快 |
+| `POSITION_MONITOR_INTERVAL_SECONDS` | 检查已开仓位是否触发止盈/止损的间隔(秒),查的是币安自己的 API,跟拉信号的频率完全独立,默认 5 秒,这些币行情变化快,不能等 3 分钟才查一次 |
+| `MAX_SIGNAL_AGE_SECONDS` | 信号窗口(`strongSince`)超过这个秒数就不再当新信号处理,要比 `SIGNAL_POLL_INTERVAL_SECONDS` 明显大一截,留出轮询延迟/漏轮的容错空间 |
 | `TRADE_EXCHANGE` | 目前只支持 `binance` |
 | `DRY_RUN` | `true` = 纯模拟不下真实单;`false` = 真实下单 |
 | `BINANCE_API_KEY` / `BINANCE_API_SECRET` | 币安合约 API 密钥(建议只开交易权限,不开提现权限,并绑定服务器 IP 白名单) |

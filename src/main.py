@@ -42,9 +42,10 @@ def run() -> None:
             log.warning("DRY_RUN 模式清理上次遗留的模拟持仓记录(非真实资金,无影响): %s", stale)
 
     log.info(
-        "参数: poll=%ss max_signal_age=%ss size=%.1fUSDT x%d leverage tp=%.2f%% sl=%.2f%% max_concurrent=%d "
-        "cooldown=%ss daily_loss_limit=%.1fUSDT",
-        settings.poll_interval_seconds,
+        "参数: signal_poll=%ss position_monitor=%ss max_signal_age=%ss size=%.1fUSDT x%d leverage "
+        "tp=%.2f%% sl=%.2f%% max_concurrent=%d cooldown=%ss daily_loss_limit=%.1fUSDT",
+        settings.signal_poll_interval_seconds,
+        settings.position_monitor_interval_seconds,
         settings.max_signal_age_seconds,
         settings.position_size_usdt,
         settings.leverage,
@@ -55,42 +56,54 @@ def run() -> None:
         settings.max_daily_loss_usdt,
     )
 
+    # 两个节奏分开:盯仓(止盈止损)要快,因为这些都是行情变化很快的币种,
+    # 拉信号要慢,因为 YBRadar 自己也就 3 分钟更新一次,拉太快只是徒增对方压力。
+    # 用一个短 tick(position_monitor_interval_seconds)跑主循环,盯仓每个 tick 都做,
+    # 拉信号只在累计够 signal_poll_interval_seconds 的时候才做一次。
+    last_signal_fetch_at = 0.0
+
     while True:
         try:
             monitor_positions(exchange, settings, state)
 
-            raw_signals = fetch_signals(settings.ybradar_api_url, settings.ybradar_session_cookie)
-            actionable = get_actionable_signals(
-                raw_signals, settings.trade_exchange, settings.max_signal_age_seconds
-            )
-            hot_count = sum(1 for s in raw_signals if s.get("signalKey") == "hot")
-            log.info(
-                "本轮心跳: 总信号=%d 强信号(hot)=%d 可执行(active+方向明确)=%d 持仓中=%d",
-                len(raw_signals),
-                hot_count,
-                len(actionable),
-                state.open_position_count(),
-            )
+            now = time.time()
+            if now - last_signal_fetch_at >= settings.signal_poll_interval_seconds:
+                last_signal_fetch_at = now
 
-            for sig in actionable:
-                key = signal_key(sig)
-                if state.already_seen(key):
-                    continue
-                # 无论最终是否进场,这个强信号窗口都只评估一次,避免它在 strongState=active
-                # 期间被每一轮循环重复触发/刷日志
-                state.mark_seen(key)
+                raw_signals = fetch_signals(settings.ybradar_api_url, settings.ybradar_session_cookie)
+                actionable = get_actionable_signals(
+                    raw_signals, settings.trade_exchange, settings.max_signal_age_seconds
+                )
+                hot_count = sum(1 for s in raw_signals if s.get("signalKey") == "hot")
+                log.info(
+                    "本轮心跳: 总信号=%d 强信号(hot)=%d 可执行(active+方向明确)=%d 持仓中=%d",
+                    len(raw_signals),
+                    hot_count,
+                    len(actionable),
+                    state.open_position_count(),
+                )
 
-                ok, reason = can_enter(sig, state, settings)
-                if not ok:
-                    log.info("跳过信号 %s:%s score=%s -> %s", sig["exchange"], sig["symbol"], sig.get("score"), reason)
-                    continue
+                for sig in actionable:
+                    key = signal_key(sig)
+                    if state.already_seen(key):
+                        continue
+                    # 无论最终是否进场,这个强信号窗口都只评估一次,避免它在 strongState=active
+                    # 期间被每一轮循环重复触发/刷日志
+                    state.mark_seen(key)
 
-                enter_position(exchange, sig, settings, state)
+                    ok, reason = can_enter(sig, state, settings)
+                    if not ok:
+                        log.info(
+                            "跳过信号 %s:%s score=%s -> %s", sig["exchange"], sig["symbol"], sig.get("score"), reason
+                        )
+                        continue
+
+                    enter_position(exchange, sig, settings, state)
 
         except Exception:
             log.exception("主循环出现异常,记录后继续下一轮")
 
-        time.sleep(settings.poll_interval_seconds)
+        time.sleep(settings.position_monitor_interval_seconds)
 
 
 if __name__ == "__main__":
