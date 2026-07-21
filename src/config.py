@@ -28,6 +28,7 @@ class Settings:
     ybradar_api_url: str
     ybradar_session_cookie: str
     poll_interval_seconds: int
+    max_signal_age_seconds: int
     trade_exchange: str
 
     dry_run: bool
@@ -50,6 +51,7 @@ def load_settings() -> Settings:
         ybradar_api_url=os.getenv("YBRADAR_API_URL", "https://ybradar.qianyuwing.com/api/signals"),
         ybradar_session_cookie=os.getenv("YBRADAR_SESSION_COOKIE", ""),
         poll_interval_seconds=_int("POLL_INTERVAL_SECONDS", 20),
+        max_signal_age_seconds=_int("MAX_SIGNAL_AGE_SECONDS", 180),
         trade_exchange=os.getenv("TRADE_EXCHANGE", "binance").strip().lower(),
         dry_run=_bool("DRY_RUN", True),
         binance_api_key=os.getenv("BINANCE_API_KEY", ""),

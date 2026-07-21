@@ -42,9 +42,10 @@ def run() -> None:
             log.warning("DRY_RUN 模式清理上次遗留的模拟持仓记录(非真实资金,无影响): %s", stale)
 
     log.info(
-        "参数: poll=%ss size=%.1fUSDT x%d leverage tp=%.2f%% sl=%.2f%% max_concurrent=%d "
+        "参数: poll=%ss max_signal_age=%ss size=%.1fUSDT x%d leverage tp=%.2f%% sl=%.2f%% max_concurrent=%d "
         "cooldown=%ss daily_loss_limit=%.1fUSDT",
         settings.poll_interval_seconds,
+        settings.max_signal_age_seconds,
         settings.position_size_usdt,
         settings.leverage,
         settings.take_profit_pct * 100,
@@ -59,7 +60,9 @@ def run() -> None:
             monitor_positions(exchange, settings, state)
 
             raw_signals = fetch_signals(settings.ybradar_api_url, settings.ybradar_session_cookie)
-            actionable = get_actionable_signals(raw_signals, settings.trade_exchange)
+            actionable = get_actionable_signals(
+                raw_signals, settings.trade_exchange, settings.max_signal_age_seconds
+            )
             hot_count = sum(1 for s in raw_signals if s.get("signalKey") == "hot")
             log.info(
                 "本轮心跳: 总信号=%d 强信号(hot)=%d 可执行(active+方向明确)=%d 持仓中=%d",

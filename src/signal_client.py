@@ -1,3 +1,4 @@
+import time
 from typing import List, TypedDict
 
 import requests
@@ -48,8 +49,16 @@ def fetch_signals(api_url: str, session_cookie: str, timeout: float = 10.0) -> L
     return data.get("signals", [])
 
 
-def get_actionable_signals(signals: List[Signal], only_exchange: str) -> List[Signal]:
-    """筛选'强信号 + 当前处于强信号窗口 + 有明确方向'的条目,并只保留可执行交易所的品种。"""
+def get_actionable_signals(
+    signals: List[Signal], only_exchange: str, max_signal_age_seconds: int
+) -> List[Signal]:
+    """筛选'强信号 + 当前处于强信号窗口 + 有明确方向 + 刚进入强信号窗口不久'的条目,
+    并只保留可执行交易所的品种。
+
+    不检查新鲜度的话,一个已经 active 了很久的信号(比如机器人刚重启时第一次看到它)
+    也会被当成"新信号"进场——这其实是追一个可能已经走完的行情,而不是抓早期异动。
+    """
+    now = time.time()
     actionable = []
     for sig in signals:
         if sig.get("exchange") != only_exchange:
@@ -60,6 +69,12 @@ def get_actionable_signals(signals: List[Signal], only_exchange: str) -> List[Si
             continue
         if sig.get("recDir") not in ("long", "short"):
             continue
+
+        strong_since = sig.get("strongSince") or 0
+        age = now - strong_since
+        if strong_since <= 0 or age < 0 or age > max_signal_age_seconds:
+            continue
+
         actionable.append(sig)
     return actionable
 
