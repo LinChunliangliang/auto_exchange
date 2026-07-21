@@ -24,6 +24,10 @@ def can_enter(sig: dict, state: StateStore, settings: Settings) -> Tuple[bool, s
     return True, ""
 
 
-def compute_entry_quantity(mark_price: float, settings: Settings) -> float:
-    notional = settings.position_size_usdt * settings.leverage
+def compute_margin(balance: float, settings: Settings) -> float:
+    return balance * settings.position_size_pct
+
+
+def compute_entry_quantity(mark_price: float, balance: float, settings: Settings) -> float:
+    notional = compute_margin(balance, settings) * settings.leverage
     return notional / mark_price

@@ -16,7 +16,7 @@ log = get_logger("main")
 def build_exchange(settings: Settings) -> Exchange:
     if settings.dry_run:
         log.info("==== DRY_RUN 模式:纯模拟,不会下任何真实订单 ====")
-        return DryRunExchange(testnet=settings.binance_testnet)
+        return DryRunExchange(testnet=settings.binance_testnet, balance_usdt=settings.dry_run_balance_usdt)
 
     if settings.trade_exchange == "binance":
         mode = "测试网" if settings.binance_testnet else "实盘(真实资金!)"
@@ -42,12 +42,12 @@ def run() -> None:
             log.warning("DRY_RUN 模式清理上次遗留的模拟持仓记录(非真实资金,无影响): %s", stale)
 
     log.info(
-        "参数: signal_poll=%ss position_monitor=%ss max_signal_age=%ss size=%.1fUSDT x%d leverage "
+        "参数: signal_poll=%ss position_monitor=%ss max_signal_age=%ss size=余额x%.1f%% x%d leverage "
         "tp=%.2f%% sl=%.2f%% max_concurrent=%d cooldown=%ss daily_loss_limit=%.1fUSDT",
         settings.signal_poll_interval_seconds,
         settings.position_monitor_interval_seconds,
         settings.max_signal_age_seconds,
-        settings.position_size_usdt,
+        settings.position_size_pct * 100,
         settings.leverage,
         settings.take_profit_pct * 100,
         settings.stop_loss_pct * 100,

@@ -13,15 +13,21 @@ class DryRunExchange(Exchange):
     这两个接口不需要 API Key)在内存里模拟开平仓。止盈/止损/超时的触发判断统一由
     trader.py 自己盯盘完成(和实盘走同一套逻辑),这里只需要如实模拟开仓和平仓两个动作。"""
 
-    def __init__(self, testnet: bool = True):
+    def __init__(self, testnet: bool = True, balance_usdt: float = 5000.0):
         self._public = BinanceFutures(api_key="", api_secret="", testnet=testnet)
         self._positions: Dict[str, dict] = {}
+        # 模拟账户没有真实余额,用一个固定的参考余额算仓位百分比(不随模拟盈亏滚动,
+        # 只是用来验证"按余额百分比开仓"这条逻辑本身对不对)
+        self._balance_usdt = balance_usdt
 
     def get_symbol_filters(self, symbol: str) -> Optional[SymbolFilters]:
         return self._public.get_symbol_filters(symbol)
 
     def get_mark_price(self, symbol: str) -> Optional[float]:
         return self._public.get_mark_price(symbol)
+
+    def get_account_balance(self, asset: str = "USDT") -> float:
+        return self._balance_usdt
 
     def set_leverage(self, symbol: str, leverage: int) -> None:
         log.info("[DRY_RUN] 设置杠杆 %s -> %sx(模拟,不发送请求)", symbol, leverage)

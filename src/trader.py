@@ -3,7 +3,7 @@ import time
 from config import Settings
 from exchange.base import Exchange
 from logger import get_logger
-from risk import compute_entry_quantity
+from risk import compute_entry_quantity, compute_margin
 from signal_client import to_exchange_symbol
 from state_store import StateStore
 
@@ -33,7 +33,12 @@ def enter_position(exchange: Exchange, sig: dict, settings: Settings, state: Sta
         log.warning("无法获取 %s 标记价格,跳过", symbol)
         return
 
-    qty = compute_entry_quantity(mark_price, settings)
+    balance = exchange.get_account_balance()
+    if balance <= 0:
+        log.warning("查询账户余额失败或余额为 0,跳过 %s", symbol)
+        return
+
+    qty = compute_entry_quantity(mark_price, balance, settings)
     if qty * mark_price < filters.min_notional:
         log.warning(
             "%s 计算出的名义价值 %.2f 低于交易所最小限制 %.2f,跳过",
@@ -74,13 +79,16 @@ def enter_position(exchange: Exchange, sig: dict, settings: Settings, state: Sta
         },
     )
     log.info(
-        "开仓成功 %s %s qty=%s entry=%.6f tp=%.6f sl=%.6f (score=%s)",
+        "开仓成功 %s %s qty=%s entry=%.6f tp=%.6f sl=%.6f margin=%.2fUSDT(余额%.2f的%.1f%%) (score=%s)",
         symbol,
         direction,
         order.executed_qty,
         entry_price,
         tp_price,
         sl_price,
+        compute_margin(balance, settings),
+        balance,
+        settings.position_size_pct * 100,
         sig.get("score"),
     )
 

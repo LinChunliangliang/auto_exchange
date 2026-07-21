@@ -38,7 +38,8 @@ class Settings:
     binance_api_secret: str
     binance_testnet: bool
 
-    position_size_usdt: float
+    position_size_pct: float
+    dry_run_balance_usdt: float
     leverage: int
     take_profit_pct: float
     stop_loss_pct: float
@@ -59,7 +60,8 @@ def load_settings() -> Settings:
         binance_api_key=os.getenv("BINANCE_API_KEY", ""),
         binance_api_secret=os.getenv("BINANCE_API_SECRET", ""),
         binance_testnet=_bool("BINANCE_TESTNET", True),
-        position_size_usdt=_float("POSITION_SIZE_USDT", 20.0),
+        position_size_pct=_float("POSITION_SIZE_PCT", 0.05),
+        dry_run_balance_usdt=_float("DRY_RUN_BALANCE_USDT", 5000.0),
         leverage=_int("LEVERAGE", 2),
         take_profit_pct=_float("TAKE_PROFIT_PCT", 0.015),
         stop_loss_pct=_float("STOP_LOSS_PCT", 0.01),
@@ -74,5 +76,8 @@ def load_settings() -> Settings:
     if not settings.dry_run and settings.trade_exchange == "binance":
         if not settings.binance_api_key or not settings.binance_api_secret:
             raise RuntimeError("非 DRY_RUN 模式下必须配置 BINANCE_API_KEY / BINANCE_API_SECRET")
+
+    if settings.position_size_pct <= 0 or settings.position_size_pct > 1:
+        raise RuntimeError("POSITION_SIZE_PCT 必须是 0~1 之间的小数(比如 0.05 = 5%),当前值明显不对")
 
     return settings

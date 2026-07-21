@@ -85,6 +85,17 @@ class BinanceFutures(Exchange):
     def set_leverage(self, symbol: str, leverage: int) -> None:
         self._request("POST", "/fapi/v1/leverage", {"symbol": symbol, "leverage": leverage}, signed=True)
 
+    def get_account_balance(self, asset: str = "USDT") -> float:
+        try:
+            data = self._request("GET", "/fapi/v2/balance", signed=True)
+        except requests.RequestException:
+            log.exception("查询账户余额失败")
+            return 0.0
+        for entry in data:
+            if entry.get("asset") == asset:
+                return float(entry.get("availableBalance") or 0.0)
+        return 0.0
+
     # ---- rounding helpers ----
     def _round_qty(self, symbol: str, qty: float) -> float:
         filters = self.get_symbol_filters(symbol)

@@ -37,6 +37,10 @@ class Exchange(ABC):
         """返回标记价格;查询失败或交易对不存在返回 None。"""
 
     @abstractmethod
+    def get_account_balance(self, asset: str = "USDT") -> float:
+        """返回账户可用余额,用于按余额百分比计算每笔仓位保证金。查询失败返回 0.0。"""
+
+    @abstractmethod
     def set_leverage(self, symbol: str, leverage: int) -> None:
         ...
 
