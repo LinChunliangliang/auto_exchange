@@ -102,13 +102,8 @@ def enter_position(exchange: Exchange, sig: dict, settings: Settings, state: Sta
     )
 
 
-def _close_and_record(exchange: Exchange, state: StateStore, symbol: str, pos: dict, reason: str) -> None:
-    try:
-        order = exchange.close_position_market(symbol, pos["close_side"], pos["qty"])
-    except Exception:
-        log.exception("平仓失败,请手动检查 %s 持仓!", symbol)
-        return
-    pnl = _compute_pnl(pos, order.avg_price)
+def _record_trade_and_cleanup(state: StateStore, symbol: str, pos: dict, reason: str, exit_price: float) -> float:
+    pnl = _compute_pnl(pos, exit_price)
     state.add_daily_pnl(pnl)
     state.set_cooldown(symbol)
     state.remove_open_position(symbol)
@@ -118,7 +113,7 @@ def _close_and_record(exchange: Exchange, state: StateStore, symbol: str, pos: d
             "side": pos["side"],
             "reason": reason,
             "entry_price": pos["entry_price"],
-            "exit_price": order.avg_price,
+            "exit_price": exit_price,
             "qty": pos["qty"],
             "pnl": pnl,
             "opened_at": pos["opened_at"],
@@ -126,16 +121,31 @@ def _close_and_record(exchange: Exchange, state: StateStore, symbol: str, pos: d
             "signal_score": pos.get("signal_score"),
         }
     )
-    log.info("平仓 %s 原因=%s exit=%.6f pnl=%.4f USDT", symbol, reason, order.avg_price, pnl)
+    log.info("平仓 %s 原因=%s exit=%.6f pnl=%.4f USDT", symbol, reason, exit_price, pnl)
+    return pnl
+
+
+def _close_and_record(exchange: Exchange, state: StateStore, symbol: str, pos: dict, reason: str) -> None:
+    try:
+        order = exchange.close_position_market(symbol, pos["close_side"], pos["qty"])
+    except Exception:
+        log.exception("平仓失败,请手动检查 %s 持仓!", symbol)
+        return
+    _record_trade_and_cleanup(state, symbol, pos, reason, order.avg_price)
 
 
 def _monitor_one_position(exchange: Exchange, state: StateStore, symbol: str, pos: dict) -> None:
     amt = exchange.get_position_amt(symbol)
     if amt == 0:
-        # 没有挂交易所条件单,仓位不该自己消失;出现这种情况基本是手动干预或爆仓
-        log.warning("%s 在交易所侧已无持仓(非机器人平仓,可能是手动操作或爆仓),清理本地记录", symbol)
-        state.set_cooldown(symbol)
-        state.remove_open_position(symbol)
+        # 没有挂交易所条件单,仓位不该自己消失;出现这种情况基本是手动干预或爆仓。
+        # 这一笔不是我们下单平的,没有真实成交价可查,用发现这一刻的标记价格估算盈亏——
+        # 不完全精确(手动平仓的实际时间点和我们发现的时间点之间可能有几秒到几分钟的
+        # 价格漂移),但总比直接把这笔从统计里漏掉、当日盈亏和熔断线因此失真要好
+        exit_price = exchange.get_mark_price(symbol)
+        if exit_price is None:
+            exit_price = pos["entry_price"]
+        log.warning("%s 在交易所侧已无持仓(非机器人平仓,可能是手动操作或爆仓),按标记价估算盈亏并记录", symbol)
+        _record_trade_and_cleanup(state, symbol, pos, "外部平仓(估算)", exit_price)
         return
 
     mark_price = exchange.get_mark_price(symbol)
