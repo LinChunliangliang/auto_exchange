@@ -53,7 +53,7 @@ def run() -> None:
 
     log.info(
         "参数: signal_poll=%ss position_monitor=%ss max_signal_age=%ss size=余额x%.1f%% x%d leverage "
-        "tp=%.2f%% sl=%.2f%% max_concurrent=%d cooldown=%ss daily_loss_limit=余额x%.1f%%",
+        "tp=%.2f%% sl=%.2f%% profit_lock_after=%ss max_concurrent=%d cooldown=%ss daily_loss_limit=余额x%.1f%%",
         settings.signal_poll_interval_seconds,
         settings.position_monitor_interval_seconds,
         settings.max_signal_age_seconds,
@@ -61,6 +61,7 @@ def run() -> None:
         settings.leverage,
         settings.take_profit_pct * 100,
         settings.stop_loss_pct * 100,
+        settings.profit_lock_after_seconds,
         settings.max_concurrent_positions,
         settings.symbol_cooldown_seconds,
         settings.max_daily_loss_pct * 100,

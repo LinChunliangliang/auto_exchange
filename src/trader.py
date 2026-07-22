@@ -146,7 +146,7 @@ def _close_and_record(exchange: Exchange, state: StateStore, symbol: str, pos: d
     _record_trade_and_cleanup(state, symbol, pos, reason, order.avg_price)
 
 
-def _monitor_one_position(exchange: Exchange, state: StateStore, symbol: str, pos: dict) -> None:
+def _monitor_one_position(exchange: Exchange, settings: Settings, state: StateStore, symbol: str, pos: dict) -> None:
     amt = exchange.get_position_amt(symbol)
     if amt == 0:
         # 没有挂交易所条件单,仓位不该自己消失;出现这种情况基本是手动干预或爆仓。
@@ -172,16 +172,24 @@ def _monitor_one_position(exchange: Exchange, state: StateStore, symbol: str, po
     if pos["side"] == "long":
         hit_tp = mark_price >= pos["tp_price"]
         hit_sl = mark_price <= pos["sl_price"]
+        in_profit = mark_price > pos["entry_price"]
     else:
         hit_tp = mark_price <= pos["tp_price"]
         hit_sl = mark_price >= pos["sl_price"]
+        in_profit = mark_price < pos["entry_price"]
+
+    held_seconds = time.time() - pos["opened_at"]
 
     if hit_tp:
         _close_and_record(exchange, state, symbol, pos, "止盈")
     elif hit_sl:
         _close_and_record(exchange, state, symbol, pos, "止损")
-    # 没有超时强平:"舔一口就跑"指的是拿到正确收益就走,不是拿够时间就走,
-    # 没到止盈/止损前就一直持有,哪怕这笔仓位拿得比预期久
+    elif held_seconds > settings.profit_lock_after_seconds and in_profit:
+        # 持仓太久说明预期的快速突破大概率已经落空了,继续拖着只是在赌反转不会发生。
+        # 只在当前有盈利时触发(哪怕没到止盈线),亏损/持平的仓位不受影响,不违反
+        # "没有超时强平"的原则——这条只锁盈,不止损
+        _close_and_record(exchange, state, symbol, pos, "超时锁盈")
+    # 没到止盈/止损/锁盈条件前就一直持有,哪怕这笔仓位拿得比预期久
 
 
 def monitor_positions(exchange: Exchange, settings: Settings, state: StateStore) -> None:
@@ -189,7 +197,7 @@ def monitor_positions(exchange: Exchange, settings: Settings, state: StateStore)
         # 每个持仓单独隔离异常:交易所限流/某个币种查询报错时,不能连累同一轮里
         # 其他持仓完全没被检查——那些仓位的止盈止损防护不能因为别的币种出问题而失效
         try:
-            _monitor_one_position(exchange, state, symbol, pos)
+            _monitor_one_position(exchange, settings, state, symbol, pos)
         except RateLimitedError as exc:
             log.warning("盯仓 %s 时被交易所限流,跳过本轮,下一轮再试: %s", symbol, exc)
         except Exception:
