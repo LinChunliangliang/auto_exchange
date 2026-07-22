@@ -53,7 +53,7 @@ def run() -> None:
 
     log.info(
         "参数: signal_poll=%ss position_monitor=%ss max_signal_age=%ss size=余额x%.1f%% x%d leverage "
-        "tp=%.2f%% sl=%.2f%% max_concurrent=%d cooldown=%ss daily_loss_limit=%.1fUSDT",
+        "tp=%.2f%% sl=%.2f%% max_concurrent=%d cooldown=%ss daily_loss_limit=余额x%.1f%%",
         settings.signal_poll_interval_seconds,
         settings.position_monitor_interval_seconds,
         settings.max_signal_age_seconds,
@@ -63,7 +63,7 @@ def run() -> None:
         settings.stop_loss_pct * 100,
         settings.max_concurrent_positions,
         settings.symbol_cooldown_seconds,
-        settings.max_daily_loss_usdt,
+        settings.max_daily_loss_pct * 100,
     )
 
     # 两个节奏分开:盯仓(止盈止损)要快,因为这些都是行情变化很快的币种,
@@ -93,22 +93,41 @@ def run() -> None:
                     state.open_position_count(),
                 )
 
-                for sig in actionable:
-                    key = signal_key(sig)
-                    if state.already_seen(key):
-                        continue
-                    # 无论最终是否进场,这个强信号窗口都只评估一次,避免它在 strongState=active
-                    # 期间被每一轮循环重复触发/刷日志
-                    state.mark_seen(key)
+                if actionable:
+                    # 余额这一轮只查一次,给这一轮所有候选信号共用(风控熔断判断和
+                    # 仓位计算要用同一个快照,顺便少打一次 API,节省限流额度)。
+                    # 代价是同一轮里如果连续进了好几笔仓,后面几笔用的余额没扣掉
+                    # 前面几笔刚占用的保证金,仓位会略微偏大——这一轮撑死也就
+                    # MAX_CONCURRENT_POSITIONS 笔,误差有限,不值得为此多打 API
+                    try:
+                        balance = exchange.get_account_balance()
+                    except Exception:
+                        log.exception("查询账户余额失败,这一轮跳过所有候选信号")
+                        balance = 0.0
 
-                    ok, reason = can_enter(sig, state, settings)
-                    if not ok:
-                        log.info(
-                            "跳过信号 %s:%s score=%s -> %s", sig["exchange"], sig["symbol"], sig.get("score"), reason
-                        )
-                        continue
+                    if balance <= 0:
+                        log.warning("账户余额查询失败或为 0,本轮不评估任何信号")
+                    else:
+                        for sig in actionable:
+                            key = signal_key(sig)
+                            if state.already_seen(key):
+                                continue
+                            # 无论最终是否进场,这个强信号窗口都只评估一次,避免它在
+                            # strongState=active 期间被每一轮循环重复触发/刷日志
+                            state.mark_seen(key)
 
-                    enter_position(exchange, sig, settings, state)
+                            ok, reason = can_enter(sig, state, settings, balance)
+                            if not ok:
+                                log.info(
+                                    "跳过信号 %s:%s score=%s -> %s",
+                                    sig["exchange"],
+                                    sig["symbol"],
+                                    sig.get("score"),
+                                    reason,
+                                )
+                                continue
+
+                            enter_position(exchange, sig, settings, state, balance)
 
         except Exception:
             log.exception("主循环出现异常,记录后继续下一轮")

@@ -139,6 +139,13 @@ def _build_view_data() -> dict:
 
     today_pnl = state.get_today_pnl()
 
+    try:
+        balance = _exchange.get_account_balance()
+    except Exception:
+        log.exception("查询账户余额失败(面板展示用,不影响交易主程序)")
+        balance = 0.0
+    daily_loss_limit_usdt = balance * _settings.max_daily_loss_pct if balance > 0 else None
+
     return {
         "mode": _mode_label(_settings),
         "is_live": not _settings.dry_run and not _settings.binance_testnet,
@@ -153,10 +160,15 @@ def _build_view_data() -> dict:
         "trades": trades,
         "stats": stats,
         "cooldowns": cooldowns,
+        "balance": balance if balance > 0 else None,
         "today_pnl": today_pnl,
-        "daily_loss_limit": _settings.max_daily_loss_usdt,
-        "daily_loss_pct": min(100, max(0, -today_pnl / _settings.max_daily_loss_usdt * 100)) if today_pnl < 0 else 0,
-        "circuit_breaker_tripped": today_pnl <= -abs(_settings.max_daily_loss_usdt),
+        "daily_loss_limit": daily_loss_limit_usdt,
+        "daily_loss_pct": (
+            min(100, max(0, -today_pnl / daily_loss_limit_usdt * 100))
+            if today_pnl < 0 and daily_loss_limit_usdt
+            else 0
+        ),
+        "circuit_breaker_tripped": bool(daily_loss_limit_usdt) and today_pnl <= -abs(daily_loss_limit_usdt),
         "settings": _settings,
         "generated_at": _fmt_ts(now),
     }
@@ -266,8 +278,8 @@ _TEMPLATE = """
       <div class="stat-value {{ 'pnl-pos' if d.today_pnl >= 0 else 'pnl-neg' }}">{{ '%.2f'|format(d.today_pnl) }} USDT</div>
     </div>
     <div>
-      <div class="stat-label">日亏损熔断线</div>
-      <div class="stat-value">{{ '%.2f'|format(d.daily_loss_limit) }} USDT</div>
+      <div class="stat-label">日亏损熔断线(余额 × {{ '%.1f%%'|format(d.settings.max_daily_loss_pct * 100) }})</div>
+      <div class="stat-value">{{ '%.2f USDT'|format(d.daily_loss_limit) if d.daily_loss_limit is not none else '余额查询失败' }}</div>
     </div>
     <div>
       <div class="stat-label">并发持仓</div>
@@ -352,7 +364,8 @@ _TEMPLATE = """
     <tr><th>止盈 / 止损</th><td>{{ '%.2f%%'|format(d.settings.take_profit_pct * 100) }} / {{ '%.2f%%'|format(d.settings.stop_loss_pct * 100) }}</td></tr>
     <tr><th>最大并发持仓</th><td>{{ d.settings.max_concurrent_positions }}</td></tr>
     <tr><th>币种冷却时间</th><td>{{ d.settings.symbol_cooldown_seconds }} 秒</td></tr>
-    <tr><th>日亏损熔断线</th><td>{{ '%.2f'|format(d.settings.max_daily_loss_usdt) }} USDT</td></tr>
+    <tr><th>日亏损熔断线</th><td>账户余额 × {{ '%.1f%%'|format(d.settings.max_daily_loss_pct * 100) }}</td></tr>
+    <tr><th>账户可用余额</th><td>{{ '%.2f USDT'|format(d.balance) if d.balance is not none else '查询失败' }}</td></tr>
   </table>
 </div>
 

@@ -17,13 +17,17 @@ def _compute_pnl(position: dict, exit_price: float) -> float:
     return (position["entry_price"] - exit_price) * qty
 
 
-def enter_position(exchange: Exchange, sig: dict, settings: Settings, state: StateStore) -> None:
+def enter_position(exchange: Exchange, sig: dict, settings: Settings, state: StateStore, balance: float) -> None:
     symbol = to_exchange_symbol(sig["symbol"])
     direction = sig["recDir"]
     entry_side = "BUY" if direction == "long" else "SELL"
     close_side = "SELL" if direction == "long" else "BUY"
 
-    # 查询阶段(交易对信息/标记价格/余额)单独隔离异常:交易所限流或网络抖动时,
+    # 余额由调用方(main.py)每轮只查一次、传进来给这一轮所有信号共用,
+    # 不在这里重复查——一是减少一次 API 调用(账户余额查询也算在限流额度里),
+    # 二是跟 can_enter 的熔断判断用的是同一个余额快照,逻辑一致
+    #
+    # 查询阶段(交易对信息/标记价格)单独隔离异常:交易所限流或网络抖动时,
     # 这次评估失败只跳过这一个信号,不能让异常冒到 main.py 的信号循环里,
     # 连累同一轮里其他候选信号也评估不到
     try:
@@ -35,11 +39,6 @@ def enter_position(exchange: Exchange, sig: dict, settings: Settings, state: Sta
         mark_price = exchange.get_mark_price(symbol)
         if not mark_price:
             log.warning("无法获取 %s 标记价格,跳过", symbol)
-            return
-
-        balance = exchange.get_account_balance()
-        if balance <= 0:
-            log.warning("查询账户余额失败或余额为 0,跳过 %s", symbol)
             return
     except RateLimitedError as exc:
         log.warning("评估信号 %s 时被交易所限流,跳过本次信号: %s", symbol, exc)

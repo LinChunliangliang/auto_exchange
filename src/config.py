@@ -45,7 +45,7 @@ class Settings:
     stop_loss_pct: float
     max_concurrent_positions: int
     symbol_cooldown_seconds: int
-    max_daily_loss_usdt: float
+    max_daily_loss_pct: float
 
     dashboard_port: int
     dashboard_username: str
@@ -71,7 +71,7 @@ def load_settings() -> Settings:
         stop_loss_pct=_float("STOP_LOSS_PCT", 0.01),
         max_concurrent_positions=_int("MAX_CONCURRENT_POSITIONS", 3),
         symbol_cooldown_seconds=_int("SYMBOL_COOLDOWN_SECONDS", 1800),
-        max_daily_loss_usdt=_float("MAX_DAILY_LOSS_USDT", 100.0),
+        max_daily_loss_pct=_float("MAX_DAILY_LOSS_PCT", 0.15),
         dashboard_port=_int("DASHBOARD_PORT", 8080),
         dashboard_username=os.getenv("DASHBOARD_USERNAME", ""),
         dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
@@ -86,5 +86,8 @@ def load_settings() -> Settings:
 
     if settings.position_size_pct <= 0 or settings.position_size_pct > 1:
         raise RuntimeError("POSITION_SIZE_PCT 必须是 0~1 之间的小数(比如 0.05 = 5%),当前值明显不对")
+
+    if settings.max_daily_loss_pct <= 0 or settings.max_daily_loss_pct > 1:
+        raise RuntimeError("MAX_DAILY_LOSS_PCT 必须是 0~1 之间的小数(比如 0.15 = 15%),当前值明显不对")
 
     return settings

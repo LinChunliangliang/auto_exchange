@@ -70,7 +70,7 @@ PYTHONPATH=src python src/main.py
 | `TAKE_PROFIT_PCT` / `STOP_LOSS_PCT` | 止盈/止损百分比,按币价格涨跌幅计算,不受杠杆影响 |
 | `MAX_CONCURRENT_POSITIONS` | 同时最多持有几个仓位 |
 | `SYMBOL_COOLDOWN_SECONDS` | 平仓后同一币种多久内不再重复进场 |
-| `MAX_DAILY_LOSS_USDT` | 当日累计亏损达到这个数就停止开新仓(熔断),已有仓位的止盈止损不受影响 |
+| `MAX_DAILY_LOSS_PCT` | 当日累计亏损达到 账户余额 × 这个百分比 就停止开新仓(熔断),已有仓位的止盈止损不受影响。跟 `POSITION_SIZE_PCT` 一样按余额百分比算,不是写死的美元数 |
 | `DASHBOARD_PORT` | 监控面板监听端口 |
 | `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` | 面板 Basic Auth 账号密码,必须改成自己的强密码,不能留空(留空面板拒绝启动) |
 
