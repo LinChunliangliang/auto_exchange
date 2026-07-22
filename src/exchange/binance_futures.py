@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import re
 import time
 from decimal import ROUND_DOWN, Decimal
 from typing import Dict, Optional
@@ -7,10 +8,12 @@ from urllib.parse import urlencode
 
 import requests
 
-from exchange.base import Exchange, OrderResult, SymbolFilters
+from exchange.base import Exchange, OrderResult, RateLimitedError, SymbolFilters
 from logger import get_logger
 
 log = get_logger("binance_futures")
+
+_BANNED_UNTIL_RE = re.compile(r"banned until (\d+)")
 
 
 class BinanceFutures(Exchange):
@@ -23,6 +26,10 @@ class BinanceFutures(Exchange):
         self._session = requests.Session()
         self._session.headers.update({"X-MBX-APIKEY": api_key})
         self._filters_cache: Dict[str, SymbolFilters] = {}
+        # 429/418 限流熔断:记录"封禁解除时间",在此之前所有请求本地直接短路拒绝,
+        # 不再真的打过去。一次限流是账号/IP 级别的,不区分具体接口,所以这里做成
+        # 整个客户端共享的状态,而不是挂在某个方法上。
+        self._banned_until: float = 0.0
 
     # ---- low level ----
     def _sign(self, params: dict) -> dict:
@@ -35,13 +42,36 @@ class BinanceFutures(Exchange):
         return params
 
     def _request(self, method: str, path: str, params: Optional[dict] = None, signed: bool = False):
+        now = time.time()
+        if now < self._banned_until:
+            raise RateLimitedError(
+                f"仍在币安限流/封禁期内,预计还有 {self._banned_until - now:.0f} 秒解除,本次请求已跳过未发出"
+            )
+
         params = dict(params or {})
         url = self._base_url + path
         if signed:
             params = self._sign(params)
         resp = self._session.request(method, url, params=params, timeout=10)
-        if resp.status_code >= 400:
+
+        if resp.status_code in (418, 429):
+            match = _BANNED_UNTIL_RE.search(resp.text)
+            if match:
+                self._banned_until = int(match.group(1)) / 1000
+            else:
+                # 429 有时不带具体解除时间,保守退避一段时间,避免继续硬打导致升级成 418
+                self._banned_until = now + 60
+            log.error(
+                "Binance API 限流 %s %s -> %s %s,本地熔断至 %.0f 秒后",
+                method,
+                path,
+                resp.status_code,
+                resp.text,
+                self._banned_until - now,
+            )
+        elif resp.status_code >= 400:
             log.error("Binance API 错误 %s %s -> %s %s", method, path, resp.status_code, resp.text)
+
         resp.raise_for_status()
         return resp.json()
 

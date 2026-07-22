@@ -19,6 +19,12 @@ class SymbolFilters:
     min_notional: float
 
 
+class RateLimitedError(RuntimeError):
+    """交易所限流/封禁期间的短路异常。定义在这个抽象层而不是具体的
+    binance_futures.py 里,这样 trader.py 只需要认识 exchange.base,不用管
+    具体是哪个交易所实现抛出来的。"""
+
+
 class Exchange(ABC):
     """交易所执行接口的抽象定义,交易主循环只依赖这一层,
     换交易所(比如以后接 OKX)只需要新实现一个子类。
