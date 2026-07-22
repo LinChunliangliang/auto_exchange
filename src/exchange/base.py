@@ -61,3 +61,8 @@ class Exchange(ABC):
     @abstractmethod
     def close_position_market(self, symbol: str, side: str, quantity: float) -> OrderResult:
         """side 是平仓方向(平多用 SELL,平空用 BUY)。"""
+
+    def get_rate_limit_remaining_seconds(self) -> float:
+        """交易所限流熔断的剩余秒数,0 表示当前没有被限流。给面板展示用,
+        默认实现返回 0,只有真实会被限流的交易所(比如 BinanceFutures)需要覆盖。"""
+        return 0.0

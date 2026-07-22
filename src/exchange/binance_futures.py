@@ -31,6 +31,9 @@ class BinanceFutures(Exchange):
         # 整个客户端共享的状态,而不是挂在某个方法上。
         self._banned_until: float = 0.0
 
+    def get_rate_limit_remaining_seconds(self) -> float:
+        return max(0.0, self._banned_until - time.time())
+
     # ---- low level ----
     def _sign(self, params: dict) -> dict:
         params = dict(params)

@@ -113,6 +113,20 @@ def _close_and_record(exchange: Exchange, state: StateStore, symbol: str, pos: d
     state.add_daily_pnl(pnl)
     state.set_cooldown(symbol)
     state.remove_open_position(symbol)
+    state.record_closed_trade(
+        {
+            "symbol": symbol,
+            "side": pos["side"],
+            "reason": reason,
+            "entry_price": pos["entry_price"],
+            "exit_price": order.avg_price,
+            "qty": pos["qty"],
+            "pnl": pnl,
+            "opened_at": pos["opened_at"],
+            "closed_at": time.time(),
+            "signal_score": pos.get("signal_score"),
+        }
+    )
     log.info("平仓 %s 原因=%s exit=%.6f pnl=%.4f USDT", symbol, reason, order.avg_price, pnl)
 
 

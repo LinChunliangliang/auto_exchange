@@ -47,6 +47,10 @@ class Settings:
     symbol_cooldown_seconds: int
     max_daily_loss_usdt: float
 
+    dashboard_port: int
+    dashboard_username: str
+    dashboard_password: str
+
 
 def load_settings() -> Settings:
     settings = Settings(
@@ -68,6 +72,9 @@ def load_settings() -> Settings:
         max_concurrent_positions=_int("MAX_CONCURRENT_POSITIONS", 3),
         symbol_cooldown_seconds=_int("SYMBOL_COOLDOWN_SECONDS", 1800),
         max_daily_loss_usdt=_float("MAX_DAILY_LOSS_USDT", 100.0),
+        dashboard_port=_int("DASHBOARD_PORT", 8080),
+        dashboard_username=os.getenv("DASHBOARD_USERNAME", ""),
+        dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
     )
 
     if not settings.ybradar_session_cookie:

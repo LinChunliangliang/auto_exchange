@@ -18,20 +18,23 @@ YBRadar 信号驱动的币安合约自动交易机器人。
 
 ```
 src/
-  main.py              主循环入口
+  main.py              交易主程序循环入口
+  dashboard.py         只读监控面板(独立进程,Flask + Basic Auth)
   config.py            .env 配置加载
   signal_client.py     拉取/过滤 YBRadar 信号
   risk.py              开仓前风控检查(并发上限/冷却期/日亏损熔断)+ 仓位数量计算
   trader.py            开仓 + 自监盘止盈止损
-  state_store.py       本地持久化状态(data/state.json):信号去重/币种冷却/当前持仓/当日盈亏
-  logger.py            日志(控制台 + data/logs/trader.log)
+  state_store.py       本地持久化状态(data/state.json):信号去重/币种冷却/当前持仓/当日盈亏/成交记录
+  status_file.py       轻量心跳状态文件(data/status.json),给面板判断主程序是否存活
+  logger.py            日志(控制台 + data/logs/trader.log,固定按北京时间显示)
   exchange/
-    base.py             交易所抽象接口
-    binance_futures.py  币安合约真实下单(测试网/实盘通过 .env 切换)
+    base.py             交易所抽象接口(含限流熔断状态查询)
+    binance_futures.py  币安合约真实下单(测试网/实盘通过 .env 切换),内置限流熔断
     dry_run.py          纯模拟交易所(不需要 API Key,用真实行情价在内存里模拟开平仓)
 deploy/
-  bootstrap.sh          一键部署脚本(全新服务器上一条命令完成部署)
-  auto_ex.service       systemd 服务定义(崩溃自动重启)
+  bootstrap.sh                一键部署脚本(全新服务器上一条命令完成部署)
+  auto_ex.service             交易主程序 systemd 服务定义(崩溃自动重启)
+  auto_ex_dashboard.service   监控面板 systemd 服务定义(崩溃自动重启)
 ```
 
 ## 本地运行
@@ -68,6 +71,28 @@ PYTHONPATH=src python src/main.py
 | `MAX_CONCURRENT_POSITIONS` | 同时最多持有几个仓位 |
 | `SYMBOL_COOLDOWN_SECONDS` | 平仓后同一币种多久内不再重复进场 |
 | `MAX_DAILY_LOSS_USDT` | 当日累计亏损达到这个数就停止开新仓(熔断),已有仓位的止盈止损不受影响 |
+| `DASHBOARD_PORT` | 监控面板监听端口 |
+| `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` | 面板 Basic Auth 账号密码,必须改成自己的强密码,不能留空(留空面板拒绝启动) |
+
+## 监控面板
+
+只读的 Web 面板,跟交易主程序是完全独立的进程(`src/dashboard.py`),挂了也不影响交易逻辑。展示内容:
+
+- 运行状态:当前模式(DRY_RUN/测试网/实盘)、心跳是否正常、交易所是否正被限流熔断
+- 当前持仓:开仓价/标记价/止盈止损线/持仓时长/浮动盈亏
+- 风控状态:当日盈亏 vs 熔断线、并发持仓数、冷却中的币种
+- 绩效统计:胜率、平均止盈/止损、净盈亏(基于最近 200 笔结构化成交记录,不依赖解析日志文本)
+- 最近成交记录、当前生效的风控参数(只读,方便确认服务器实际跑的是哪套配置)
+
+本地单独运行:
+
+```bash
+PYTHONPATH=src python src/dashboard.py
+```
+
+浏览器/手机访问 `http://<地址>:<DASHBOARD_PORT>/`,会弹出账号密码框(HTTP Basic Auth)。
+
+**安全提示**:Basic Auth 在没有配 HTTPS 的情况下是明文传输,不要用你在其他地方也在用的密码。面板只读,没有任何下单/改配置的操作入口,即使密码泄露也不会导致直接的资金操作,但会暴露仓位/盈亏等信息。
 
 ## 部署到服务器
 
@@ -77,13 +102,14 @@ PYTHONPATH=src python src/main.py
 curl -fsSL https://raw.githubusercontent.com/LinChunliangliang/auto_exchange/main/deploy/bootstrap.sh | sudo bash
 ```
 
-会自动完成:安装依赖、创建专用运行用户(不用 root 直接跑交易机器人)、clone 代码、创建虚拟环境并装依赖、安装 systemd 服务(崩溃自动重启)、配置防火墙(只放行 SSH)。
+会自动完成:安装依赖、创建专用运行用户(不用 root 直接跑交易机器人)、clone 代码、创建虚拟环境并装依赖、安装交易主程序和监控面板两个 systemd 服务(都配置崩溃自动重启)、配置防火墙(探测并放行实际使用的 SSH 端口 + 面板端口,其余一律拒绝)。
 
-`.env` 不在仓库里(含密钥,已 gitignore),首次部署脚本会从 `.env.example` 复制一份占位文件,检测到还没填真实配置就不会自动启动服务,需要手动:
+`.env` 不在仓库里(含密钥,已 gitignore),首次部署脚本会从 `.env.example` 复制一份占位文件。交易主程序和面板是分开判断是否就绪的:检测到 `YBRADAR_SESSION_COOKIE` 还没填就不会启动交易主程序,检测到 `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` 还没填就不会启动面板,需要手动:
 
 ```bash
-sudo nano /opt/auto_ex/.env    # 填入真实配置
-sudo systemctl start auto_ex
+sudo nano /opt/auto_ex/.env             # 填入真实配置
+sudo systemctl start auto_ex            # 交易主程序
+sudo systemctl start auto_ex_dashboard  # 监控面板
 ```
 
 **更新代码**:重新执行同一条 curl 命令即可,脚本是幂等的,不会覆盖已有的 `.env` 和 `data/`(历史日志/状态)。但要注意——`.env` 里的具体数值(比如风控参数)不会被 `git pull` 自动同步,改了默认配置后记得手动同步服务器上的 `.env` 再重启。
@@ -91,10 +117,12 @@ sudo systemctl start auto_ex
 常用命令:
 
 ```bash
-sudo systemctl status auto_ex               # 服务状态
-sudo journalctl -u auto_ex -f               # 实时日志(含每轮心跳)
-tail -f /opt/auto_ex/data/logs/trader.log   # 交易日志
-sudo systemctl restart auto_ex              # 改配置后重启生效
+sudo systemctl status auto_ex                    # 交易主程序状态
+sudo journalctl -u auto_ex -f                    # 交易主程序实时日志(含每轮心跳)
+tail -f /opt/auto_ex/data/logs/trader.log        # 交易明细日志
+sudo systemctl status auto_ex_dashboard          # 面板状态
+sudo journalctl -u auto_ex_dashboard -f          # 面板日志
+sudo systemctl restart auto_ex auto_ex_dashboard # 改配置后重启生效
 ```
 
 ## 已知限制 / 重要说明

@@ -1,0 +1,26 @@
+[Unit]
+Description=Auto Ex - monitoring dashboard (read-only web panel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=autoex
+Group=autoex
+WorkingDirectory=/opt/auto_ex
+Environment=PYTHONPATH=/opt/auto_ex/src
+ExecStart=/opt/auto_ex/.venv/bin/python /opt/auto_ex/src/dashboard.py
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# 加固:限制这个服务能碰到的系统资源范围,跟交易主程序用同一套加固策略
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/auto_ex/data
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

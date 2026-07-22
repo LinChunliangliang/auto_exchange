@@ -78,10 +78,12 @@ sudo -u "$SERVICE_USER" "$APP_DIR/.venv/bin/pip" install -q -r "$APP_DIR/require
 
 echo "== 安装 systemd 服务 =="
 cp "$APP_DIR/deploy/auto_ex.service" /etc/systemd/system/auto_ex.service
+cp "$APP_DIR/deploy/auto_ex_dashboard.service" /etc/systemd/system/auto_ex_dashboard.service
 systemctl daemon-reload
 systemctl enable auto_ex
+systemctl enable auto_ex_dashboard
 
-echo "== 防火墙:只放行 SSH,其他一律拒绝 =="
+echo "== 防火墙:只放行 SSH 和监控面板端口,其他一律拒绝 =="
 # 之前这里直接用 `ufw allow OpenSSH`,这个规则硬编码放行 22 端口,不会读 sshd 实际配置。
 # 如果服务器 SSH 用的是非 22 端口,ufw enable 之后真实端口没被放行,会直接把自己锁在外面。
 # 改成实际探测 sshd 正在监听的端口:优先看运行时真实监听(ss),配置文件解析做兜底。
@@ -108,6 +110,15 @@ for p in $SSH_PORTS; do
   fi
 done
 
+# 面板端口从 .env 里读,不是硬编码猜的,跟 SSH 端口那次教训不一样——这个端口是我们
+# 自己在配置里定义的,不存在"猜错"的问题
+DASHBOARD_PORT="$(grep -E '^DASHBOARD_PORT=' "$APP_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d '[:space:]')"
+DASHBOARD_PORT="${DASHBOARD_PORT:-8080}"
+if ! [[ "$DASHBOARD_PORT" =~ ^[0-9]+$ ]]; then
+  echo "DASHBOARD_PORT 配置值不是合法端口号,面板端口这次不放行,请检查 .env" >&2
+  DASHBOARD_PORT=""
+fi
+
 if [ -z "$SSH_PORTS" ] || [ "$PORTS_VALID" = false ]; then
   echo "!! 无法可靠探测到 SSH 监听端口,为避免把你锁在外面,这次跳过防火墙配置 !!" >&2
   echo "!! 请手动确认 SSH 端口后自己执行: ufw allow <你的端口>/tcp && ufw enable !!" >&2
@@ -116,6 +127,10 @@ else
   for p in $SSH_PORTS; do
     ufw allow "$p"/tcp
   done
+  if [ -n "$DASHBOARD_PORT" ]; then
+    ufw allow "$DASHBOARD_PORT"/tcp
+    echo "已放行监控面板端口: $DASHBOARD_PORT/tcp"
+  fi
   ufw --force enable || true
 fi
 
@@ -132,7 +147,7 @@ if [ "$NEEDS_CONFIG" = true ]; then
   cat <<EOF
 
 ======================================================================
-.env 还没有配置真实的 YBRADAR_SESSION_COOKIE / 币安 API Key,服务先不启动。
+.env 还没有配置真实的 YBRADAR_SESSION_COOKIE / 币安 API Key,交易主程序先不启动。
 
 编辑配置:
   sudo nano $APP_DIR/.env
@@ -144,16 +159,47 @@ EOF
 else
   systemctl restart auto_ex
   sleep 2
-  echo "== 服务状态 =="
+  echo "== 交易主程序服务状态 =="
   systemctl --no-pager status auto_ex || true
+fi
+
+# 面板账号密码是独立于交易配置的另一件事,单独判断要不要启动
+DASHBOARD_READY=true
+if ! grep -qE '^DASHBOARD_USERNAME=.+' "$APP_DIR/.env" || ! grep -qE '^DASHBOARD_PASSWORD=.+' "$APP_DIR/.env" \
+   || grep -qE '^DASHBOARD_USERNAME=换成' "$APP_DIR/.env" || grep -qE '^DASHBOARD_PASSWORD=换成' "$APP_DIR/.env"; then
+  DASHBOARD_READY=false
+fi
+
+if [ "$DASHBOARD_READY" = true ]; then
+  systemctl restart auto_ex_dashboard
+  sleep 1
+  echo "== 监控面板服务状态 =="
+  systemctl --no-pager status auto_ex_dashboard || true
+else
+  cat <<EOF
+
+======================================================================
+.env 里 DASHBOARD_USERNAME / DASHBOARD_PASSWORD 还没配置真实值,面板先不启动。
+
+编辑配置:
+  sudo nano $APP_DIR/.env
+
+填好之后启动:
+  sudo systemctl start auto_ex_dashboard
+======================================================================
+EOF
 fi
 
 cat <<EOF
 
 常用命令:
-  查看状态:         sudo systemctl status auto_ex
-  查看实时日志:     sudo journalctl -u auto_ex -f
-  查看交易日志:     tail -f $APP_DIR/data/logs/trader.log
-  改配置后重启:     sudo systemctl restart auto_ex
+  查看交易主程序状态: sudo systemctl status auto_ex
+  查看交易主程序日志: sudo journalctl -u auto_ex -f
+  查看交易明细日志:   tail -f $APP_DIR/data/logs/trader.log
+  查看面板状态:       sudo systemctl status auto_ex_dashboard
+  查看面板日志:       sudo journalctl -u auto_ex_dashboard -f
+  改配置后重启:       sudo systemctl restart auto_ex auto_ex_dashboard
   更新代码并重新部署: 重新执行这条 curl 命令即可(不会覆盖 .env 和 data/)
+
+监控面板访问地址: http://<服务器IP>:${DASHBOARD_PORT:-8080}/(浏览器/手机都可以,会弹出账号密码框)
 EOF

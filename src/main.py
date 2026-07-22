@@ -1,3 +1,4 @@
+import os
 import time
 
 from config import Settings, load_settings
@@ -8,6 +9,7 @@ from logger import get_logger
 from risk import can_enter
 from signal_client import fetch_signals, get_actionable_signals, signal_key
 from state_store import StateStore
+from status_file import write_status
 from trader import enter_position, monitor_positions
 
 log = get_logger("main")
@@ -26,10 +28,18 @@ def build_exchange(settings: Settings) -> Exchange:
     raise RuntimeError(f"暂不支持的交易所: {settings.trade_exchange}")
 
 
+def _mode_label(settings: Settings) -> str:
+    if settings.dry_run:
+        return "dry_run"
+    return "testnet" if settings.binance_testnet else "live"
+
+
 def run() -> None:
     settings = load_settings()
     exchange = build_exchange(settings)
     state = StateStore()
+    mode = _mode_label(settings)
+    started_at = time.time()
 
     if settings.dry_run:
         # DRY_RUN 的"交易所"状态只存在于本次进程内存中,进程重启后不会记得任何模拟持仓,
@@ -102,6 +112,16 @@ def run() -> None:
 
         except Exception:
             log.exception("主循环出现异常,记录后继续下一轮")
+
+        # 不管这一轮有没有异常都写心跳,面板靠这个判断"进程是不是还活着",
+        # 而不是靠 state.json(那个只在持仓/信号变化时才更新,长时间没有信号时不会动)
+        write_status(
+            last_tick_at=time.time(),
+            started_at=started_at,
+            mode=mode,
+            pid=os.getpid(),
+            rate_limit_remaining_seconds=exchange.get_rate_limit_remaining_seconds(),
+        )
 
         time.sleep(settings.position_monitor_interval_seconds)
 
