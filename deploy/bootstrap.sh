@@ -143,6 +143,23 @@ elif grep -q "换成你自己的" "$APP_DIR/.env" || ! grep -qE '^YBRADAR_SESSIO
   NEEDS_CONFIG=true
 fi
 
+# 面板账号密码是独立于交易配置的另一件事,单独判断要不要启动
+DASHBOARD_READY=true
+if ! grep -qE '^DASHBOARD_USERNAME=.+' "$APP_DIR/.env" || ! grep -qE '^DASHBOARD_PASSWORD=.+' "$APP_DIR/.env" \
+   || grep -qE '^DASHBOARD_USERNAME=换成' "$APP_DIR/.env" || grep -qE '^DASHBOARD_PASSWORD=换成' "$APP_DIR/.env"; then
+  DASHBOARD_READY=false
+fi
+
+# 只需要一条命令:auto_ex.service 里配置了 Wants=auto_ex_dashboard.service,
+# 启动交易主程序时会顺带启动面板(如果面板配置也就绪)。只有交易配置没就绪、
+# 但面板配置就绪的边缘情况,才需要单独拉起面板。
+if [ "$NEEDS_CONFIG" = false ]; then
+  systemctl restart auto_ex
+elif [ "$DASHBOARD_READY" = true ]; then
+  systemctl restart auto_ex_dashboard
+fi
+sleep 2
+
 if [ "$NEEDS_CONFIG" = true ]; then
   cat <<EOF
 
@@ -152,30 +169,13 @@ if [ "$NEEDS_CONFIG" = true ]; then
 编辑配置:
   sudo nano $APP_DIR/.env
 
-填好之后启动:
+填好之后,一条命令同时启动交易主程序和面板:
   sudo systemctl start auto_ex
 ======================================================================
 EOF
-else
-  systemctl restart auto_ex
-  sleep 2
-  echo "== 交易主程序服务状态 =="
-  systemctl --no-pager status auto_ex || true
 fi
 
-# 面板账号密码是独立于交易配置的另一件事,单独判断要不要启动
-DASHBOARD_READY=true
-if ! grep -qE '^DASHBOARD_USERNAME=.+' "$APP_DIR/.env" || ! grep -qE '^DASHBOARD_PASSWORD=.+' "$APP_DIR/.env" \
-   || grep -qE '^DASHBOARD_USERNAME=换成' "$APP_DIR/.env" || grep -qE '^DASHBOARD_PASSWORD=换成' "$APP_DIR/.env"; then
-  DASHBOARD_READY=false
-fi
-
-if [ "$DASHBOARD_READY" = true ]; then
-  systemctl restart auto_ex_dashboard
-  sleep 1
-  echo "== 监控面板服务状态 =="
-  systemctl --no-pager status auto_ex_dashboard || true
-else
+if [ "$DASHBOARD_READY" = false ]; then
   cat <<EOF
 
 ======================================================================
@@ -184,21 +184,28 @@ else
 编辑配置:
   sudo nano $APP_DIR/.env
 
-填好之后启动:
+填好之后:
   sudo systemctl start auto_ex_dashboard
 ======================================================================
 EOF
 fi
 
+echo "== 服务状态 =="
+systemctl --no-pager status auto_ex || true
+systemctl --no-pager status auto_ex_dashboard || true
+
 cat <<EOF
 
 常用命令:
+  首次启动(一条命令同时拉起交易主程序 + 面板): sudo systemctl start auto_ex
   查看交易主程序状态: sudo systemctl status auto_ex
   查看交易主程序日志: sudo journalctl -u auto_ex -f
   查看交易明细日志:   tail -f $APP_DIR/data/logs/trader.log
   查看面板状态:       sudo systemctl status auto_ex_dashboard
   查看面板日志:       sudo journalctl -u auto_ex_dashboard -f
-  改配置后重启:       sudo systemctl restart auto_ex auto_ex_dashboard
+  改配置后重启两个都生效: sudo systemctl restart auto_ex auto_ex_dashboard
+    (注意: 面板已经在跑的情况下,单独 restart auto_ex 不会连带重启面板,
+     Wants= 只在面板还没启动时才会顺带拉起它,改了面板相关配置要显式带上两个服务名)
   更新代码并重新部署: 重新执行这条 curl 命令即可(不会覆盖 .env 和 data/)
 
 监控面板访问地址: http://<服务器IP>:${DASHBOARD_PORT:-8080}/(浏览器/手机都可以,会弹出账号密码框)

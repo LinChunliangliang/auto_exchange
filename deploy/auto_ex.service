@@ -2,6 +2,10 @@
 Description=Auto Ex - YBRadar signal-driven trading bot
 After=network-online.target
 Wants=network-online.target
+# 启动/重启这个服务时顺带把面板也拉起来,只需要一条命令(systemctl start auto_ex)。
+# Wants= 是软依赖:面板没配好账号密码导致启动失败,不会影响交易主程序正常启动;
+# 反过来 stop/restart 交易主程序也不会连带停掉面板,两边故障域还是分开的。
+Wants=auto_ex_dashboard.service
 
 [Service]
 Type=simple
