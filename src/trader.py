@@ -33,7 +33,7 @@ def enter_position(exchange: Exchange, sig: dict, settings: Settings, state: Sta
     try:
         filters = exchange.get_symbol_filters(symbol)
         if filters is None:
-            log.warning("交易对 %s 不存在于交易所,跳过信号", symbol)
+            log.warning("交易对 %s 不存在或不可交易(可能是股票/大宗商品代币化合约),跳过信号", symbol)
             return
 
         mark_price = exchange.get_mark_price(symbol)

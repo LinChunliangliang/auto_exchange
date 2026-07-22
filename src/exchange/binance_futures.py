@@ -86,6 +86,16 @@ class BinanceFutures(Exchange):
         for s in data.get("symbols", []):
             if s["symbol"] != symbol:
                 continue
+            # 股票/大宗商品代币化合约(NVDA、TSLA、XAU 这类,contractType=TRADIFI_PERPETUAL)
+            # 需要在币安网页/APP 上单独签一份 TradFi-Perps 协议才能交易(-4411),API 层面
+            # 绕不过去。这类品种跟"抓加密货币异动"的策略也不是一回事,直接当成不可交易处理
+            if s.get("contractType") != "PERPETUAL":
+                log.info(
+                    "%s 不是普通加密货币永续合约(contractType=%s),跳过",
+                    symbol,
+                    s.get("contractType"),
+                )
+                return None
             qty_step = 1.0
             price_tick = 0.01
             min_notional = 5.0
