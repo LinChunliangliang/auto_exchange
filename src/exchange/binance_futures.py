@@ -189,3 +189,21 @@ class BinanceFutures(Exchange):
         avg_price = float(resp.get("avgPrice") or 0) or self.get_mark_price(symbol) or 0.0
         executed_qty = float(resp.get("executedQty") or 0) or qty
         return OrderResult(order_id=str(resp["orderId"]), avg_price=avg_price, executed_qty=executed_qty)
+
+    def get_realized_pnl(self, symbol: str, since_ts: float) -> Optional[float]:
+        try:
+            data = self._request(
+                "GET",
+                "/fapi/v1/income",
+                {
+                    "symbol": symbol,
+                    "incomeType": "REALIZED_PNL",
+                    "startTime": int(since_ts * 1000),
+                    "limit": 1000,
+                },
+                signed=True,
+            )
+        except Exception:
+            log.exception("查询 %s 真实已实现盈亏失败,调用方会退回到标记价格估算", symbol)
+            return None
+        return sum(float(entry["income"]) for entry in data)

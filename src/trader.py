@@ -1,4 +1,5 @@
 import time
+from typing import Optional
 
 from config import Settings
 from exchange.base import Exchange, RateLimitedError
@@ -15,6 +16,15 @@ def _compute_pnl(position: dict, exit_price: float) -> float:
     if position["side"] == "long":
         return (exit_price - position["entry_price"]) * qty
     return (position["entry_price"] - exit_price) * qty
+
+
+def _implied_exit_price(position: dict, pnl: float) -> float:
+    """由真实盈亏反推一个"虚拟成交价",只是为了让记录里 exit_price 和 pnl 两个字段
+    互相对得上(方便面板显示),不是真的还原了对方平仓那一刻的确切成交价格。"""
+    qty = position["qty"]
+    if position["side"] == "long":
+        return position["entry_price"] + pnl / qty
+    return position["entry_price"] - pnl / qty
 
 
 def enter_position(exchange: Exchange, sig: dict, settings: Settings, state: StateStore, balance: float) -> None:
@@ -102,8 +112,10 @@ def enter_position(exchange: Exchange, sig: dict, settings: Settings, state: Sta
     )
 
 
-def _record_trade_and_cleanup(state: StateStore, symbol: str, pos: dict, reason: str, exit_price: float) -> float:
-    pnl = _compute_pnl(pos, exit_price)
+def _record_trade_and_cleanup(
+    state: StateStore, symbol: str, pos: dict, reason: str, exit_price: float, pnl_override: Optional[float] = None
+) -> float:
+    pnl = pnl_override if pnl_override is not None else _compute_pnl(pos, exit_price)
     state.add_daily_pnl(pnl)
     state.set_cooldown(symbol)
     state.remove_open_position(symbol)
@@ -138,14 +150,19 @@ def _monitor_one_position(exchange: Exchange, state: StateStore, symbol: str, po
     amt = exchange.get_position_amt(symbol)
     if amt == 0:
         # 没有挂交易所条件单,仓位不该自己消失;出现这种情况基本是手动干预或爆仓。
-        # 这一笔不是我们下单平的,没有真实成交价可查,用发现这一刻的标记价格估算盈亏——
-        # 不完全精确(手动平仓的实际时间点和我们发现的时间点之间可能有几秒到几分钟的
-        # 价格漂移),但总比直接把这笔从统计里漏掉、当日盈亏和熔断线因此失真要好
-        exit_price = exchange.get_mark_price(symbol)
-        if exit_price is None:
-            exit_price = pos["entry_price"]
-        log.warning("%s 在交易所侧已无持仓(非机器人平仓,可能是手动操作或爆仓),按标记价估算盈亏并记录", symbol)
-        _record_trade_and_cleanup(state, symbol, pos, "外部平仓(估算)", exit_price)
+        # 这一笔不是我们下单平的,优先查交易所自己算的真实已实现盈亏(准确,包含手续费);
+        # 查不到(比如交易所不支持/查询失败)才退回到用标记价格估算,好过完全不记录
+        realized_pnl = exchange.get_realized_pnl(symbol, pos["opened_at"])
+        if realized_pnl is not None:
+            exit_price = _implied_exit_price(pos, realized_pnl)
+            log.warning("%s 在交易所侧已无持仓(非机器人平仓),已查到真实已实现盈亏,记录", symbol)
+            _record_trade_and_cleanup(state, symbol, pos, "外部平仓", exit_price, pnl_override=realized_pnl)
+        else:
+            exit_price = exchange.get_mark_price(symbol)
+            if exit_price is None:
+                exit_price = pos["entry_price"]
+            log.warning("%s 在交易所侧已无持仓(非机器人平仓),查不到真实盈亏,按标记价估算并记录", symbol)
+            _record_trade_and_cleanup(state, symbol, pos, "外部平仓(估算)", exit_price)
         return
 
     mark_price = exchange.get_mark_price(symbol)

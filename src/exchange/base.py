@@ -66,3 +66,9 @@ class Exchange(ABC):
         """交易所限流熔断的剩余秒数,0 表示当前没有被限流。给面板展示用,
         默认实现返回 0,只有真实会被限流的交易所(比如 BinanceFutures)需要覆盖。"""
         return 0.0
+
+    def get_realized_pnl(self, symbol: str, since_ts: float) -> Optional[float]:
+        """查询 since_ts 之后这个品种的真实已实现盈亏(交易所自己算的,包含手续费),
+        用来给"不是机器人自己平的仓"(手动平仓/爆仓)拿到准确数字,而不是靠标记价格
+        估算。查不到/该交易所不支持这个查询就返回 None,调用方会退回到估算兜底。"""
+        return None
