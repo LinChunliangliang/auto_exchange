@@ -156,6 +156,32 @@ class BinanceFutures(Exchange):
         value = (Decimal(str(price)) / tick).to_integral_value(rounding=ROUND_DOWN) * tick
         return float(value)
 
+    def _resolve_fill(self, symbol: str, order_id, fallback_qty: float) -> tuple:
+        """市价单刚提交时,POST /fapi/v1/order 的响应经常还没回填真实成交均价/数量
+        (avgPrice/executedQty 是异步生成的,常见返回 "0")。这里主动再查一次订单状态
+        拿真实成交结果,而不是拿标记价格顶替——标记价格不是真实成交价,尤其这些
+        快速波动的币,几秒的价格漂移就足以让盈亏记录跟交易所真实记录对不上,
+        严重的话连盈亏的正负号都会算反。查询失败几次才退回标记价格当最后兜底。"""
+        for attempt in range(3):
+            try:
+                order = self._request("GET", "/fapi/v1/order", {"symbol": symbol, "orderId": order_id}, signed=True)
+            except Exception:
+                log.exception("查询订单 %s(%s)真实成交结果失败,重试中", symbol, order_id)
+                order = {}
+            avg_price = float(order.get("avgPrice") or 0)
+            executed_qty = float(order.get("executedQty") or 0)
+            if avg_price > 0 and executed_qty > 0:
+                return avg_price, executed_qty
+            if attempt < 2:
+                time.sleep(0.3)
+
+        log.warning(
+            "订单 %s(%s)查了 3 次还是拿不到真实成交均价,退回标记价格估算(可能跟真实成交价有偏差)",
+            symbol,
+            order_id,
+        )
+        return self.get_mark_price(symbol) or 0.0, fallback_qty
+
     # ---- trading ----
     def place_market_order(self, symbol: str, side: str, quantity: float) -> OrderResult:
         qty = self._round_qty(symbol, quantity)
@@ -165,11 +191,9 @@ class BinanceFutures(Exchange):
             {"symbol": symbol, "side": side, "type": "MARKET", "quantity": qty},
             signed=True,
         )
-        avg_price = float(resp.get("avgPrice") or 0) or self.get_mark_price(symbol) or 0.0
-        # 市价单刚提交时交易所常常还没回填 executedQty(返回字符串 "0"),
-        # 必须先转成 float 再判断是否需要用委托数量兜底,否则非空字符串 "0" 恒为真,fallback 永远不会触发
-        executed_qty = float(resp.get("executedQty") or 0) or qty
-        return OrderResult(order_id=str(resp["orderId"]), avg_price=avg_price, executed_qty=executed_qty)
+        order_id = resp["orderId"]
+        avg_price, executed_qty = self._resolve_fill(symbol, order_id, qty)
+        return OrderResult(order_id=str(order_id), avg_price=avg_price, executed_qty=executed_qty)
 
     def get_position_amt(self, symbol: str) -> float:
         data = self._request("GET", "/fapi/v2/positionRisk", {"symbol": symbol}, signed=True)
@@ -186,9 +210,9 @@ class BinanceFutures(Exchange):
             {"symbol": symbol, "side": side, "type": "MARKET", "quantity": qty, "reduceOnly": "true"},
             signed=True,
         )
-        avg_price = float(resp.get("avgPrice") or 0) or self.get_mark_price(symbol) or 0.0
-        executed_qty = float(resp.get("executedQty") or 0) or qty
-        return OrderResult(order_id=str(resp["orderId"]), avg_price=avg_price, executed_qty=executed_qty)
+        order_id = resp["orderId"]
+        avg_price, executed_qty = self._resolve_fill(symbol, order_id, qty)
+        return OrderResult(order_id=str(order_id), avg_price=avg_price, executed_qty=executed_qty)
 
     def get_realized_pnl(self, symbol: str, since_ts: float) -> Optional[float]:
         try:
