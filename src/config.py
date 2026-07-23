@@ -46,6 +46,11 @@ class Settings:
     stop_loss_pct: float
     profit_lock_after_seconds: int
     profit_lock_min_pct: float
+    ladder_take_profit_enabled: bool
+    ladder_first_close_pct: float
+    ladder_step_close_pct: float
+    ladder_max_levels: int
+    ladder_breakeven_buffer_pct: float
     max_concurrent_positions: int
     symbol_cooldown_seconds: int
     max_daily_loss_pct: float
@@ -75,6 +80,11 @@ def load_settings() -> Settings:
         stop_loss_pct=_float("STOP_LOSS_PCT", 0.01),
         profit_lock_after_seconds=_int("PROFIT_LOCK_AFTER_SECONDS", 600),
         profit_lock_min_pct=_float("PROFIT_LOCK_MIN_PCT", 0.003),
+        ladder_take_profit_enabled=_bool("LADDER_TAKE_PROFIT_ENABLED", False),
+        ladder_first_close_pct=_float("LADDER_FIRST_CLOSE_PCT", 0.70),
+        ladder_step_close_pct=_float("LADDER_STEP_CLOSE_PCT", 0.50),
+        ladder_max_levels=_int("LADDER_MAX_LEVELS", 6),
+        ladder_breakeven_buffer_pct=_float("LADDER_BREAKEVEN_BUFFER_PCT", 0.001),
         max_concurrent_positions=_int("MAX_CONCURRENT_POSITIONS", 3),
         symbol_cooldown_seconds=_int("SYMBOL_COOLDOWN_SECONDS", 1800),
         max_daily_loss_pct=_float("MAX_DAILY_LOSS_PCT", 0.15),
@@ -95,5 +105,8 @@ def load_settings() -> Settings:
 
     if settings.max_daily_loss_pct <= 0 or settings.max_daily_loss_pct > 1:
         raise RuntimeError("MAX_DAILY_LOSS_PCT 必须是 0~1 之间的小数(比如 0.15 = 15%),当前值明显不对")
+
+    if not (0 < settings.ladder_first_close_pct <= 1) or not (0 < settings.ladder_step_close_pct <= 1):
+        raise RuntimeError("LADDER_FIRST_CLOSE_PCT / LADDER_STEP_CLOSE_PCT 必须是 0~1 之间的小数")
 
     return settings

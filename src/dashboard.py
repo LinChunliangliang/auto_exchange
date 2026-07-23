@@ -91,12 +91,15 @@ def _build_view_data() -> dict:
                 unrealized_pnl = (mark_price - pos["entry_price"]) * pos["qty"]
             else:
                 unrealized_pnl = (pos["entry_price"] - mark_price) * pos["qty"]
+        tp_price = pos["tp_price"]
+        tp_capped = tp_price in (float("inf"), 0.0)
         positions.append(
             {
                 "symbol": symbol,
                 "side": pos["side"],
                 "entry_price": pos["entry_price"],
-                "tp_price": pos["tp_price"],
+                "tp_price": tp_price,
+                "tp_capped": tp_capped,
                 "sl_price": pos["sl_price"],
                 "qty": pos["qty"],
                 "notional": pos["qty"] * pos["entry_price"],
@@ -104,6 +107,7 @@ def _build_view_data() -> dict:
                 "unrealized_pnl": unrealized_pnl,
                 "held_for": _fmt_duration(now - pos["opened_at"]),
                 "signal_score": pos.get("signal_score"),
+                "ladder_level": pos.get("ladder_level", 0),
             }
         )
 
@@ -248,15 +252,16 @@ _TEMPLATE = """
 <div class="card table-wrap">
   {% if d.positions %}
   <table>
-    <tr><th>币种</th><th>方向</th><th>开仓价</th><th>标记价</th><th>止盈</th><th>止损</th><th>名义价值</th><th>持仓时长</th><th>浮动盈亏</th></tr>
+    <tr><th>币种</th><th>方向</th><th>开仓价</th><th>标记价</th><th>止盈</th><th>止损</th><th>阶梯档位</th><th>名义价值</th><th>持仓时长</th><th>浮动盈亏</th></tr>
     {% for p in d.positions %}
     <tr>
       <td>{{ p.symbol }}</td>
       <td>{{ '多' if p.side == 'long' else '空' }}</td>
       <td>{{ '%.6f'|format(p.entry_price) }}</td>
       <td>{{ '%.6f'|format(p.mark_price) if p.mark_price is not none else '查询失败' }}</td>
-      <td>{{ '%.6f'|format(p.tp_price) }}</td>
+      <td>{{ '已封顶' if p.tp_capped else '%.6f'|format(p.tp_price) }}</td>
       <td>{{ '%.6f'|format(p.sl_price) }}</td>
+      <td>{{ '第%d档'|format(p.ladder_level) if p.ladder_level else '-' }}</td>
       <td>{{ '%.2f'|format(p.notional) }} USDT</td>
       <td>{{ p.held_for }}</td>
       <td class="{{ 'pnl-pos' if (p.unrealized_pnl or 0) >= 0 else 'pnl-neg' }}">
@@ -363,6 +368,13 @@ _TEMPLATE = """
     <tr><th>每笔保证金</th><td>账户余额 × {{ '%.1f%%'|format(d.settings.position_size_pct * 100) }}</td></tr>
     <tr><th>止盈 / 止损</th><td>{{ '%.2f%%'|format(d.settings.take_profit_pct * 100) }} / {{ '%.2f%%'|format(d.settings.stop_loss_pct * 100) }}</td></tr>
     <tr><th>超时锁盈阈值</th><td>{{ d.settings.profit_lock_after_seconds }} 秒,浮盈超过 {{ '%.2f%%'|format(d.settings.profit_lock_min_pct * 100) }} 才触发</td></tr>
+    <tr><th>阶梯止盈</th><td>
+      {% if d.settings.ladder_take_profit_enabled %}
+        开启:第1档{{ '%.0f%%'|format(d.settings.ladder_first_close_pct * 100) }},之后每档{{ '%.0f%%'|format(d.settings.ladder_step_close_pct * 100) }},最多{{ d.settings.ladder_max_levels }}档,保本缓冲{{ '%.2f%%'|format(d.settings.ladder_breakeven_buffer_pct * 100) }}
+      {% else %}
+        关闭(碰到止盈线一次性全平)
+      {% endif %}
+    </td></tr>
     <tr><th>最大并发持仓</th><td>{{ d.settings.max_concurrent_positions }}</td></tr>
     <tr><th>币种冷却时间</th><td>{{ d.settings.symbol_cooldown_seconds }} 秒</td></tr>
     <tr><th>日亏损熔断线</th><td>账户余额 × {{ '%.1f%%'|format(d.settings.max_daily_loss_pct * 100) }}</td></tr>

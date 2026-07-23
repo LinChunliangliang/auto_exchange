@@ -14,6 +14,7 @@ YBRadar 信号驱动的币安合约自动交易机器人。
 - 止盈/止损阈值按**币本位涨跌幅**计算(`entry_price` 直接乘百分比),不受杠杆影响
 - **没有"亏损也强平"的超时逻辑**:亏损或持平的仓位不会因为拿久了就被强平,一直等到止盈/止损线——"舔一口就跑"指的是拿到正确收益才走,不是拿够时间就走
 - **但持仓超过 `PROFIT_LOCK_AFTER_SECONDS` 且浮盈超过 `PROFIT_LOCK_MIN_PCT` 会锁定收益提前平仓**:持仓太久说明预期的快速突破大概率已经落空,继续拖着只是在赌反转不会发生;必须超过最小浮盈门槛才触发(市价单平仓有真实的手续费+滑点成本,浮盈太薄的话锁盈这个动作本身执行完反而会变成亏损),不影响亏损/持平的仓位
+- **可选的阶梯止盈**(`LADDER_TAKE_PROFIT_ENABLED`,默认关闭):碰到止盈线不是一次性全平,而是分批止盈——第1档平掉大部分仓位并把止损上移到保本附近,后面每再往有利方向走一个 `TAKE_PROFIT_PCT` 就把剩余仓位再平一半,最多加到 `LADDER_MAX_LEVELS` 档封顶,剩下的尾巴交给保本止损/超时锁盈处理。每一档都是真实的部分平仓,单独记一笔成交记录
 
 ## 架构
 
@@ -72,6 +73,10 @@ PYTHONPATH=src python src/main.py
 | `TAKE_PROFIT_PCT` / `STOP_LOSS_PCT` | 止盈/止损百分比,按币价格涨跌幅计算,不受杠杆影响 |
 | `PROFIT_LOCK_AFTER_SECONDS` | 持仓超过这个秒数,且浮盈超过 `PROFIT_LOCK_MIN_PCT` 就平仓锁定收益(哪怕没到止盈线);亏损/持平的仓位不受影响 |
 | `PROFIT_LOCK_MIN_PCT` | 触发"超时锁盈"所需的最小浮盈百分比,防止浮盈太薄、锁盈时被手续费+滑点吃成亏损 |
+| `LADDER_TAKE_PROFIT_ENABLED` | 是否启用阶梯止盈(分批止盈),默认 `false`(碰到止盈线一次性全平) |
+| `LADDER_FIRST_CLOSE_PCT` / `LADDER_STEP_CLOSE_PCT` | 第1档平仓比例 / 第2档及以后每档平掉剩余仓位的比例 |
+| `LADDER_MAX_LEVELS` | 阶梯最多加到第几档,超过就封顶,剩余仓位交给保本止损/超时锁盈处理 |
+| `LADDER_BREAKEVEN_BUFFER_PCT` | 第1档触发后止损上移到"开仓价 × (1+这个百分比)",留一点缓冲覆盖手续费+滑点 |
 | `MAX_CONCURRENT_POSITIONS` | 同时最多持有几个仓位 |
 | `SYMBOL_COOLDOWN_SECONDS` | 平仓后同一币种多久内不再重复进场 |
 | `MAX_DAILY_LOSS_PCT` | 当日累计亏损达到 账户余额 × 这个百分比 就停止开新仓(熔断),已有仓位的止盈止损不受影响。跟 `POSITION_SIZE_PCT` 一样按余额百分比算,不是写死的美元数 |

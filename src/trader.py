@@ -11,11 +11,20 @@ from state_store import StateStore
 log = get_logger("trader")
 
 
-def _compute_pnl(position: dict, exit_price: float) -> float:
-    qty = position["qty"]
+def _compute_pnl(position: dict, exit_price: float, qty: Optional[float] = None) -> float:
+    q = qty if qty is not None else position["qty"]
     if position["side"] == "long":
-        return (exit_price - position["entry_price"]) * qty
-    return (position["entry_price"] - exit_price) * qty
+        return (exit_price - position["entry_price"]) * q
+    return (position["entry_price"] - exit_price) * q
+
+
+def _ladder_price(entry_price: float, side: str, level: int, settings: Settings) -> float:
+    """第 N 档阶梯止盈的触发价格:每一档比开仓价多(或少)一个 TAKE_PROFIT_PCT。
+    第 1 档就是原本的止盈线,后面每一档在此基础上再往有利方向多推一个身位。"""
+    step = settings.take_profit_pct * level
+    if side == "long":
+        return entry_price * (1 + step)
+    return entry_price * (1 - step)
 
 
 def _implied_exit_price(position: dict, pnl: float) -> float:
@@ -95,6 +104,7 @@ def enter_position(exchange: Exchange, sig: dict, settings: Settings, state: Sta
             "sl_price": sl_price,
             "opened_at": time.time(),
             "signal_score": sig.get("score"),
+            "ladder_level": 0,
         },
     )
     log.info(
@@ -146,6 +156,92 @@ def _close_and_record(exchange: Exchange, state: StateStore, symbol: str, pos: d
     _record_trade_and_cleanup(state, symbol, pos, reason, order.avg_price)
 
 
+def _partial_close_and_advance(
+    exchange: Exchange,
+    state: StateStore,
+    settings: Settings,
+    symbol: str,
+    pos: dict,
+    close_fraction: float,
+    new_ladder_level: int,
+    move_sl_to_breakeven: bool,
+) -> None:
+    """阶梯止盈:只平掉一部分仓位,剩下的继续持有,不设置冷却、不从 open_positions 里移除。
+    每一档平仓都是真实成交、真实已实现盈亏,单独记一笔成交记录(reason 标注具体第几档),
+    不是等到最后全部平完才记一笔。"""
+    filters = exchange.get_symbol_filters(symbol)
+    qty_to_close = pos["qty"] * close_fraction
+
+    if filters and qty_to_close < filters.qty_step:
+        # 剩下的仓位已经小到没法再有效分批(平仓数量会被交易所取整成 0),
+        # 直接封顶,不再继续加档,把止盈线设成永远碰不到,交给保本止损/超时锁盈处理尾巴
+        log.info("%s 剩余仓位太小,无法继续阶梯分批止盈,提前封顶", symbol)
+        updated = dict(pos)
+        updated["tp_price"] = float("inf") if pos["side"] == "long" else 0.0
+        state.add_open_position(symbol, updated)
+        return
+
+    try:
+        order = exchange.close_position_market(symbol, pos["close_side"], qty_to_close)
+    except Exception:
+        log.exception("阶梯止盈平仓失败,请手动检查 %s 持仓!", symbol)
+        return
+
+    closed_qty = order.executed_qty
+    pnl = _compute_pnl(pos, order.avg_price, qty=closed_qty)
+    state.add_daily_pnl(pnl)
+    state.record_closed_trade(
+        {
+            "symbol": symbol,
+            "side": pos["side"],
+            "reason": f"阶梯止盈L{new_ladder_level}",
+            "entry_price": pos["entry_price"],
+            "exit_price": order.avg_price,
+            "qty": closed_qty,
+            "pnl": pnl,
+            "opened_at": pos["opened_at"],
+            "closed_at": time.time(),
+            "signal_score": pos.get("signal_score"),
+        }
+    )
+    log.info(
+        "阶梯止盈 %s 第%d档 平仓比例=%.0f%% qty=%s exit=%.6f pnl=%.4f USDT",
+        symbol,
+        new_ladder_level,
+        close_fraction * 100,
+        closed_qty,
+        order.avg_price,
+        pnl,
+    )
+
+    remaining_qty = pos["qty"] - closed_qty
+    min_step = filters.qty_step if filters else 0.0
+    if remaining_qty <= max(min_step, 1e-12):
+        # 取整误差导致基本没剩多少,当成完全平仓处理
+        state.set_cooldown(symbol)
+        state.remove_open_position(symbol)
+        log.info("%s 阶梯止盈后剩余仓位可忽略,视为完全平仓", symbol)
+        return
+
+    updated = dict(pos)
+    updated["qty"] = remaining_qty
+    updated["ladder_level"] = new_ladder_level
+
+    if move_sl_to_breakeven:
+        if pos["side"] == "long":
+            updated["sl_price"] = pos["entry_price"] * (1 + settings.ladder_breakeven_buffer_pct)
+        else:
+            updated["sl_price"] = pos["entry_price"] * (1 - settings.ladder_breakeven_buffer_pct)
+
+    if new_ladder_level >= settings.ladder_max_levels:
+        # 阶梯封顶:不再继续加档,剩下的尾巴只交给保本止损/超时锁盈处理
+        updated["tp_price"] = float("inf") if pos["side"] == "long" else 0.0
+    else:
+        updated["tp_price"] = _ladder_price(pos["entry_price"], pos["side"], new_ladder_level + 1, settings)
+
+    state.add_open_position(symbol, updated)
+
+
 def _monitor_one_position(exchange: Exchange, settings: Settings, state: StateStore, symbol: str, pos: dict) -> None:
     amt = exchange.get_position_amt(symbol)
     if amt == 0:
@@ -183,9 +279,45 @@ def _monitor_one_position(exchange: Exchange, settings: Settings, state: StateSt
     held_seconds = time.time() - pos["opened_at"]
 
     if hit_tp:
-        _close_and_record(exchange, state, symbol, pos, "止盈")
+        if not settings.ladder_take_profit_enabled:
+            _close_and_record(exchange, state, symbol, pos, "止盈")
+        else:
+            ladder_level = pos.get("ladder_level", 0)
+            if ladder_level == 0:
+                # 第 1 档:平掉大部分仓位锁定确定收益,剩下的止损上移到保本+缓冲,
+                # 缓冲是为了覆盖平仓时的真实手续费+滑点,不然"保本"执行完可能变成小亏
+                _partial_close_and_advance(
+                    exchange,
+                    state,
+                    settings,
+                    symbol,
+                    pos,
+                    close_fraction=settings.ladder_first_close_pct,
+                    new_ladder_level=1,
+                    move_sl_to_breakeven=True,
+                )
+            elif ladder_level < settings.ladder_max_levels:
+                # 第 2~N 档:每往有利方向再走一个 TAKE_PROFIT_PCT,就把剩下仓位再平一半,
+                # 止损保持在已经上移的保本位置不变
+                _partial_close_and_advance(
+                    exchange,
+                    state,
+                    settings,
+                    symbol,
+                    pos,
+                    close_fraction=settings.ladder_step_close_pct,
+                    new_ladder_level=ladder_level + 1,
+                    move_sl_to_breakeven=False,
+                )
+            else:
+                # 正常不会走到这里:封顶后 tp_price 已经被设成永远碰不到
+                log.warning("%s 阶梯止盈已经封顶,不应再触发,忽略", symbol)
     elif hit_sl:
-        _close_and_record(exchange, state, symbol, pos, "止损")
+        # 阶梯止盈已经推进过(ladder_level>0)的话,止损线早就上移到保本+缓冲了,
+        # 这时候触发的不是真实亏损,是"锁定过收益后,剩下的尾巴回落到保本位置了",
+        # 单独标注原因,不然在成交记录里会显示"止损"却是正盈亏,容易看错
+        reason = "止损" if pos.get("ladder_level", 0) == 0 else "保本止损"
+        _close_and_record(exchange, state, symbol, pos, reason)
     elif held_seconds > settings.profit_lock_after_seconds and in_profit_enough:
         # 持仓太久说明预期的快速突破大概率已经落空了,继续拖着只是在赌反转不会发生。
         # 只在浮盈超过 PROFIT_LOCK_MIN_PCT 时才触发(不是随便有一点点浮盈就锁)——
