@@ -45,6 +45,7 @@ class Settings:
     take_profit_pct: float
     stop_loss_pct: float
     profit_lock_after_seconds: int
+    profit_lock_min_pct: float
     max_concurrent_positions: int
     symbol_cooldown_seconds: int
     max_daily_loss_pct: float
@@ -73,6 +74,7 @@ def load_settings() -> Settings:
         take_profit_pct=_float("TAKE_PROFIT_PCT", 0.015),
         stop_loss_pct=_float("STOP_LOSS_PCT", 0.01),
         profit_lock_after_seconds=_int("PROFIT_LOCK_AFTER_SECONDS", 600),
+        profit_lock_min_pct=_float("PROFIT_LOCK_MIN_PCT", 0.003),
         max_concurrent_positions=_int("MAX_CONCURRENT_POSITIONS", 3),
         symbol_cooldown_seconds=_int("SYMBOL_COOLDOWN_SECONDS", 1800),
         max_daily_loss_pct=_float("MAX_DAILY_LOSS_PCT", 0.15),

@@ -362,7 +362,7 @@ _TEMPLATE = """
     <tr><th>杠杆</th><td>{{ d.settings.leverage }}x</td></tr>
     <tr><th>每笔保证金</th><td>账户余额 × {{ '%.1f%%'|format(d.settings.position_size_pct * 100) }}</td></tr>
     <tr><th>止盈 / 止损</th><td>{{ '%.2f%%'|format(d.settings.take_profit_pct * 100) }} / {{ '%.2f%%'|format(d.settings.stop_loss_pct * 100) }}</td></tr>
-    <tr><th>超时锁盈阈值</th><td>{{ d.settings.profit_lock_after_seconds }} 秒</td></tr>
+    <tr><th>超时锁盈阈值</th><td>{{ d.settings.profit_lock_after_seconds }} 秒,浮盈超过 {{ '%.2f%%'|format(d.settings.profit_lock_min_pct * 100) }} 才触发</td></tr>
     <tr><th>最大并发持仓</th><td>{{ d.settings.max_concurrent_positions }}</td></tr>
     <tr><th>币种冷却时间</th><td>{{ d.settings.symbol_cooldown_seconds }} 秒</td></tr>
     <tr><th>日亏损熔断线</th><td>账户余额 × {{ '%.1f%%'|format(d.settings.max_daily_loss_pct * 100) }}</td></tr>

@@ -172,11 +172,13 @@ def _monitor_one_position(exchange: Exchange, settings: Settings, state: StateSt
     if pos["side"] == "long":
         hit_tp = mark_price >= pos["tp_price"]
         hit_sl = mark_price <= pos["sl_price"]
-        in_profit = mark_price > pos["entry_price"]
+        profit_lock_price = pos["entry_price"] * (1 + settings.profit_lock_min_pct)
+        in_profit_enough = mark_price >= profit_lock_price
     else:
         hit_tp = mark_price <= pos["tp_price"]
         hit_sl = mark_price >= pos["sl_price"]
-        in_profit = mark_price < pos["entry_price"]
+        profit_lock_price = pos["entry_price"] * (1 - settings.profit_lock_min_pct)
+        in_profit_enough = mark_price <= profit_lock_price
 
     held_seconds = time.time() - pos["opened_at"]
 
@@ -184,10 +186,12 @@ def _monitor_one_position(exchange: Exchange, settings: Settings, state: StateSt
         _close_and_record(exchange, state, symbol, pos, "止盈")
     elif hit_sl:
         _close_and_record(exchange, state, symbol, pos, "止损")
-    elif held_seconds > settings.profit_lock_after_seconds and in_profit:
+    elif held_seconds > settings.profit_lock_after_seconds and in_profit_enough:
         # 持仓太久说明预期的快速突破大概率已经落空了,继续拖着只是在赌反转不会发生。
-        # 只在当前有盈利时触发(哪怕没到止盈线),亏损/持平的仓位不受影响,不违反
-        # "没有超时强平"的原则——这条只锁盈,不止损
+        # 只在浮盈超过 PROFIT_LOCK_MIN_PCT 时才触发(不是随便有一点点浮盈就锁)——
+        # 市价单平仓有真实的手续费+滑点成本,浮盈太薄的话,锁盈这个动作本身执行完
+        # 反而会变成亏损,这个最小门槛就是为了避免"为了锁盈反而亏钱"这种情况。
+        # 亏损/持平的仓位完全不受影响,不违反"没有超时强平"的原则——这条只锁盈,不止损
         _close_and_record(exchange, state, symbol, pos, "超时锁盈")
     # 没到止盈/止损/锁盈条件前就一直持有,哪怕这笔仓位拿得比预期久
 
