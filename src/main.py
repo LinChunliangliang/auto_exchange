@@ -18,12 +18,21 @@ log = get_logger("main")
 def build_exchange(settings: Settings) -> Exchange:
     if settings.dry_run:
         log.info("==== DRY_RUN 模式:纯模拟,不会下任何真实订单 ====")
-        return DryRunExchange(testnet=settings.binance_testnet, balance_usdt=settings.dry_run_balance_usdt)
+        return DryRunExchange(
+            testnet=settings.binance_testnet,
+            balance_usdt=settings.dry_run_balance_usdt,
+            allow_tradifi_perpetuals=settings.allow_tradifi_perpetuals,
+        )
 
     if settings.trade_exchange == "binance":
         mode = "测试网" if settings.binance_testnet else "实盘(真实资金!)"
         log.info("==== 真实下单模式:币安合约 %s ====", mode)
-        return BinanceFutures(settings.binance_api_key, settings.binance_api_secret, settings.binance_testnet)
+        return BinanceFutures(
+            settings.binance_api_key,
+            settings.binance_api_secret,
+            settings.binance_testnet,
+            allow_tradifi_perpetuals=settings.allow_tradifi_perpetuals,
+        )
 
     raise RuntimeError(f"暂不支持的交易所: {settings.trade_exchange}")
 

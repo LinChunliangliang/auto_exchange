@@ -19,13 +19,17 @@ _BANNED_UNTIL_RE = re.compile(r"banned until (\d+)")
 class BinanceFutures(Exchange):
     """币安 USDⓈ-M 合约 REST 客户端(testnet.binancefuture.com / fapi.binance.com)。"""
 
-    def __init__(self, api_key: str, api_secret: str, testnet: bool = True):
+    def __init__(self, api_key: str, api_secret: str, testnet: bool = True, allow_tradifi_perpetuals: bool = False):
         self._api_key = api_key
         self._api_secret = api_secret
         self._base_url = "https://testnet.binancefuture.com" if testnet else "https://fapi.binance.com"
         self._session = requests.Session()
         self._session.headers.update({"X-MBX-APIKEY": api_key})
         self._filters_cache: Dict[str, SymbolFilters] = {}
+        # 美股/大宗商品代币化合约(NVDA、TSLA、XAU 这类,contractType=TRADIFI_PERPETUAL)
+        # 需要先在币安网页/APP 上签过 TradFi-Perps 协议,API 才能交易(-4411)。默认关闭,
+        # 免得没签协议的账号一直尝试评估这类信号、反复报错
+        self._allow_tradifi_perpetuals = allow_tradifi_perpetuals
         # 429/418 限流熔断:记录"封禁解除时间",在此之前所有请求本地直接短路拒绝,
         # 不再真的打过去。一次限流是账号/IP 级别的,不区分具体接口,所以这里做成
         # 整个客户端共享的状态,而不是挂在某个方法上。
@@ -88,10 +92,13 @@ class BinanceFutures(Exchange):
                 continue
             # 股票/大宗商品代币化合约(NVDA、TSLA、XAU 这类,contractType=TRADIFI_PERPETUAL)
             # 需要在币安网页/APP 上单独签一份 TradFi-Perps 协议才能交易(-4411),API 层面
-            # 绕不过去。这类品种跟"抓加密货币异动"的策略也不是一回事,直接当成不可交易处理
-            if s.get("contractType") != "PERPETUAL":
+            # 绕不过去,所以默认跳过。ALLOW_TRADIFI_PERPETUALS=true 且已经签过协议的话才放行
+            allowed_types = {"PERPETUAL"}
+            if self._allow_tradifi_perpetuals:
+                allowed_types.add("TRADIFI_PERPETUAL")
+            if s.get("contractType") not in allowed_types:
                 log.info(
-                    "%s 不是普通加密货币永续合约(contractType=%s),跳过",
+                    "%s 的合约类型(%s)不在允许交易范围内,跳过",
                     symbol,
                     s.get("contractType"),
                 )

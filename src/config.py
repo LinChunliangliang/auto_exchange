@@ -37,6 +37,7 @@ class Settings:
     binance_api_key: str
     binance_api_secret: str
     binance_testnet: bool
+    allow_tradifi_perpetuals: bool
 
     position_size_pct: float
     dry_run_balance_usdt: float
@@ -65,6 +66,7 @@ def load_settings() -> Settings:
         binance_api_key=os.getenv("BINANCE_API_KEY", ""),
         binance_api_secret=os.getenv("BINANCE_API_SECRET", ""),
         binance_testnet=_bool("BINANCE_TESTNET", True),
+        allow_tradifi_perpetuals=_bool("ALLOW_TRADIFI_PERPETUALS", False),
         position_size_pct=_float("POSITION_SIZE_PCT", 0.05),
         dry_run_balance_usdt=_float("DRY_RUN_BALANCE_USDT", 5000.0),
         leverage=_int("LEVERAGE", 2),

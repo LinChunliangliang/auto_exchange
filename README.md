@@ -65,6 +65,7 @@ PYTHONPATH=src python src/main.py
 | `DRY_RUN` | `true` = 纯模拟不下真实单;`false` = 真实下单 |
 | `BINANCE_API_KEY` / `BINANCE_API_SECRET` | 币安合约 API 密钥(建议只开交易权限,不开提现权限,并绑定服务器 IP 白名单) |
 | `BINANCE_TESTNET` | `true` = 测试网假资金;`false` = 实盘真实资金 |
+| `ALLOW_TRADIFI_PERPETUALS` | 是否交易美股/大宗商品代币化合约(NVDA、TSLA、XAU 这类)。默认 `false`;需要先在币安网页/APP 签过 TradFi-Perps 协议才能改成 `true`,而且这套策略的信号打分是针对加密货币调的,美股品种的信号质量没验证过,交易时段也跟随美股,建议先小范围观察 |
 | `POSITION_SIZE_PCT` | 每笔保证金 = 账户可用余额 × 这个百分比(小数,0.05 = 5%),每次开仓前实时查余额计算,不是固定金额,名义仓位 = 保证金 × `LEVERAGE` |
 | `DRY_RUN_BALANCE_USDT` | 仅 `DRY_RUN=true` 时用到,模拟账户没有真实余额,用这个固定值当参考余额 |
 | `LEVERAGE` | 杠杆倍数 |
