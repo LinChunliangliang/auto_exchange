@@ -151,11 +151,13 @@ if ! grep -qE '^DASHBOARD_USERNAME=.+' "$APP_DIR/.env" || ! grep -qE '^DASHBOARD
 fi
 
 # 只需要一条命令:auto_ex.service 里配置了 Wants=auto_ex_dashboard.service,
-# 启动交易主程序时会顺带启动面板(如果面板配置也就绪)。只有交易配置没就绪、
-# 但面板配置就绪的边缘情况,才需要单独拉起面板。
+# 首次启动交易主程序时会顺带拉起面板(如果面板配置也就绪)。但 Wants= 只在面板
+# 还没启动时才会启动它,不会重启一个已经在跑的面板——所以更新代码后必须分别
+# 显式 restart 两个服务,不能指望重启 auto_ex 顺带让面板也生效新代码。
 if [ "$NEEDS_CONFIG" = false ]; then
   systemctl restart auto_ex
-elif [ "$DASHBOARD_READY" = true ]; then
+fi
+if [ "$DASHBOARD_READY" = true ]; then
   systemctl restart auto_ex_dashboard
 fi
 sleep 2
