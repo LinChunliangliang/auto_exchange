@@ -110,19 +110,34 @@ def load_settings() -> Settings:
         if not settings.binance_api_key or not settings.binance_api_secret:
             raise RuntimeError("非 DRY_RUN 模式下必须配置 BINANCE_API_KEY / BINANCE_API_SECRET")
 
+    validate_settings(settings)
+    return settings
+
+
+def validate_settings(settings: Settings) -> None:
+    """跟 load_settings() 分开成独立函数,是因为面板可以动态覆盖部分风控参数
+    (见 control_store.py),覆盖后合成的新 Settings 也要过一遍同样的合法性检查,
+    不能让面板把配置改成一个自相矛盾的组合。"""
     if settings.position_size_pct <= 0 or settings.position_size_pct > 1:
-        raise RuntimeError("POSITION_SIZE_PCT 必须是 0~1 之间的小数(比如 0.05 = 5%),当前值明显不对")
+        raise ValueError("POSITION_SIZE_PCT 必须是 0~1 之间的小数(比如 0.05 = 5%),当前值明显不对")
 
     if settings.max_daily_loss_pct <= 0 or settings.max_daily_loss_pct > 1:
-        raise RuntimeError("MAX_DAILY_LOSS_PCT 必须是 0~1 之间的小数(比如 0.15 = 15%),当前值明显不对")
+        raise ValueError("MAX_DAILY_LOSS_PCT 必须是 0~1 之间的小数(比如 0.15 = 15%),当前值明显不对")
 
     if not (0 < settings.ladder_first_close_pct <= 1) or not (0 < settings.ladder_step_close_pct <= 1):
-        raise RuntimeError("LADDER_FIRST_CLOSE_PCT / LADDER_STEP_CLOSE_PCT 必须是 0~1 之间的小数")
+        raise ValueError("LADDER_FIRST_CLOSE_PCT / LADDER_STEP_CLOSE_PCT 必须是 0~1 之间的小数")
 
     if settings.atr_min_stop_pct > settings.stop_loss_pct:
-        raise RuntimeError(
+        raise ValueError(
             "ATR_MIN_STOP_PCT 不能比 STOP_LOSS_PCT 还大——STOP_LOSS_PCT 在 ATR 止损模式下"
             "是止损空间的上限,ATR_MIN_STOP_PCT 是下限,下限不能超过上限"
         )
 
-    return settings
+    if settings.take_profit_pct <= 0 or settings.stop_loss_pct <= 0:
+        raise ValueError("TAKE_PROFIT_PCT / STOP_LOSS_PCT 必须大于 0")
+
+    if settings.leverage <= 0:
+        raise ValueError("LEVERAGE 必须大于 0")
+
+    if settings.max_concurrent_positions <= 0:
+        raise ValueError("MAX_CONCURRENT_POSITIONS 必须大于 0")

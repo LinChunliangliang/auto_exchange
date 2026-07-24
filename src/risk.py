@@ -10,9 +10,12 @@ def can_enter(sig: dict, state: StateStore, settings: Settings, balance: float) 
     # 必须用和下单时同一套符号(交易所符号)做状态 key,否则"已有持仓/冷却中"的检查会失效
     symbol = to_exchange_symbol(sig["symbol"])
 
-    # 面板上的"暂停开仓"开关和币种黑名单:每次都重新从磁盘读取(不缓存),
-    # 这样面板(独立进程)随时改的开关,主程序下一轮检查就能生效,不需要重启
+    # 面板上的"暂停开仓"开关、币种黑名单、以及可覆盖的风控参数:每次都重新从磁盘
+    # 读取(不缓存),这样面板(独立进程)随时改的设置,主程序下一轮检查就能生效,
+    # 不需要重启交易主程序
     control = ControlStore()
+    settings = control.resolve_effective_settings(settings)
+
     if not control.is_trading_enabled():
         return False, "面板已暂停开仓"
 

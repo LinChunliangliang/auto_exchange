@@ -2,6 +2,7 @@ import time
 from typing import Optional
 
 from config import Settings
+from control_store import ControlStore
 from exchange.base import Exchange, RateLimitedError
 from logger import get_logger
 from risk import compute_entry_quantity, compute_margin_from_qty
@@ -37,6 +38,10 @@ def _implied_exit_price(position: dict, pnl: float) -> float:
 
 
 def enter_position(exchange: Exchange, sig: dict, settings: Settings, state: StateStore, balance: float) -> None:
+    # 面板可能覆盖了部分风控参数(止盈止损/仓位/杠杆等),每次开仓都重新解析一次
+    # 最新生效值,不用重启交易主程序就能让面板上的改动作用到下一笔新开的仓位
+    settings = ControlStore().resolve_effective_settings(settings)
+
     symbol = to_exchange_symbol(sig["symbol"])
     direction = sig["recDir"]
     entry_side = "BUY" if direction == "long" else "SELL"
@@ -359,6 +364,10 @@ def _monitor_one_position(exchange: Exchange, settings: Settings, state: StateSt
 
 
 def monitor_positions(exchange: Exchange, settings: Settings, state: StateStore) -> None:
+    # 跟 enter_position 一样,每轮盯仓开始时重新解析一次面板覆盖后的最新参数——
+    # 这一轮里所有持仓用同一个快照,避免同一轮检查中途参数突然变化导致行为不一致
+    settings = ControlStore().resolve_effective_settings(settings)
+
     for symbol, pos in state.get_open_positions().items():
         # 每个持仓单独隔离异常:交易所限流/某个币种查询报错时,不能连累同一轮里
         # 其他持仓完全没被检查——那些仓位的止盈止损防护不能因为别的币种出问题而失效

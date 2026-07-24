@@ -1,13 +1,14 @@
 import hmac
+import os
 import time
 from datetime import datetime
 from functools import wraps
 from zoneinfo import ZoneInfo
 
-from flask import Flask, Response, redirect, render_template_string, request, url_for
+from flask import Flask, Response, flash, redirect, render_template_string, request, url_for
 
 from config import Settings, load_settings
-from control_store import ControlStore
+from control_store import OVERRIDABLE_FIELDS, ControlStore
 from exchange.base import Exchange
 from logger import get_logger
 from main import build_exchange
@@ -18,7 +19,46 @@ log = get_logger("dashboard")
 
 _TZ = ZoneInfo("Asia/Shanghai")
 
+# 面板允许在线修改的策略参数,按功能分组展示;每组里 (字段名, 中文标签, 输入类型)。
+# 字段白名单本身在 control_store.py 里维护(凭证/运行模式类字段不允许覆盖),
+# 这里只是给允许覆盖的字段配一个展示分组和标签,纯 UI 关注点。
+_SETTING_GROUPS = [
+    ("仓位与并发风控", [
+        ("position_size_pct", "仓位比例(占余额,如 0.05=5%)", "number"),
+        ("leverage", "杠杆倍数", "int"),
+        ("max_concurrent_positions", "最大并发持仓数", "int"),
+        ("symbol_cooldown_seconds", "币种冷却时间(秒)", "int"),
+        ("max_daily_loss_pct", "日亏损熔断线(占余额,如 0.15=15%)", "number"),
+    ]),
+    ("止盈止损", [
+        ("take_profit_pct", "止盈百分比(如 0.02=2%)", "number"),
+        ("stop_loss_pct", "止损百分比(如 0.02=2%)", "number"),
+    ]),
+    ("ATR 动态止损", [
+        ("atr_stop_loss_enabled", "开启 ATR 动态止损", "bool"),
+        ("atr_period", "ATR 周期(K线根数)", "int"),
+        ("atr_interval", "ATR K线粒度(如 5m)", "text"),
+        ("atr_multiplier", "ATR 乘数", "number"),
+        ("atr_min_stop_pct", "ATR 止损下限(不能大于止损百分比)", "number"),
+    ]),
+    ("超时锁盈", [
+        ("profit_lock_after_seconds", "超时锁盈触发时长(秒)", "int"),
+        ("profit_lock_min_pct", "超时锁盈最小浮盈门槛", "number"),
+    ]),
+    ("阶梯止盈", [
+        ("ladder_take_profit_enabled", "开启阶梯止盈", "bool"),
+        ("ladder_first_close_pct", "第1档平仓比例", "number"),
+        ("ladder_step_close_pct", "后续每档平仓比例", "number"),
+        ("ladder_max_levels", "最多加到第几档", "int"),
+        ("ladder_breakeven_buffer_pct", "保本止损缓冲", "number"),
+    ]),
+]
+
 app = Flask(__name__)
+# 只用来给"面板操作成功/失败"的提示消息签名(flash 消息存在 session cookie 里),
+# 不是登录凭证——真正的访问控制还是靠 Basic Auth。每次进程重启换一个新的没关系,
+# 提示消息本来就只是这次请求周期内的一次性反馈,不需要跨重启保留。
+app.secret_key = os.urandom(32)
 _settings: Settings = load_settings()
 _exchange: Exchange = build_exchange(_settings)
 # 面板是独立进程,跟真正跑交易的 main.py 进程分开。StateStore 只在构造时读一次文件,
@@ -136,23 +176,41 @@ def _build_view_data() -> dict:
         "net_pnl": sum(t["pnl"] for t in recent),
     }
 
+    control = ControlStore()
+    overrides = control.get_setting_overrides()
+    effective_settings = control.resolve_effective_settings(_settings)
+
     cooldowns = []
     now_ts = time.time()
     for symbol, last_closed_at in state.get_cooldowns().items():
-        remaining = _settings.symbol_cooldown_seconds - (now_ts - last_closed_at)
+        remaining = effective_settings.symbol_cooldown_seconds - (now_ts - last_closed_at)
         if remaining > 0:
             cooldowns.append({"symbol": symbol, "remaining": _fmt_duration(remaining)})
 
     today_pnl = state.get_today_pnl()
 
-    control = ControlStore()
+    setting_groups = []
+    for group_name, fields in _SETTING_GROUPS:
+        rows = []
+        for field, label, input_type in fields:
+            rows.append(
+                {
+                    "field": field,
+                    "label": label,
+                    "input_type": input_type,
+                    "value": getattr(effective_settings, field),
+                    "default": getattr(_settings, field),
+                    "overridden": field in overrides,
+                }
+            )
+        setting_groups.append({"name": group_name, "rows": rows})
 
     try:
         balance = _exchange.get_account_balance()
     except Exception:
         log.exception("查询账户余额失败(面板展示用,不影响交易主程序)")
         balance = 0.0
-    daily_loss_limit_usdt = balance * _settings.max_daily_loss_pct if balance > 0 else None
+    daily_loss_limit_usdt = balance * effective_settings.max_daily_loss_pct if balance > 0 else None
 
     return {
         "mode": _mode_label(_settings),
@@ -179,7 +237,8 @@ def _build_view_data() -> dict:
         "circuit_breaker_tripped": bool(daily_loss_limit_usdt) and today_pnl <= -abs(daily_loss_limit_usdt),
         "trading_enabled": control.is_trading_enabled(),
         "blacklist": control.get_blacklist(),
-        "settings": _settings,
+        "setting_groups": setting_groups,
+        "settings": effective_settings,
         "generated_at": _fmt_ts(now),
     }
 
@@ -256,6 +315,16 @@ _TEMPLATE = """
 <h1>auto_ex 监控面板</h1>
 <div class="sub">数据生成于 {{ d.generated_at }}(每次刷新页面重新拉取一次)</div>
 
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+  <div class="card">
+    {% for category, msg in messages %}
+    <div class="{{ 'pnl-neg' if category == 'error' else 'pnl-pos' }}">{{ '⚠' if category == 'error' else '✓' }} {{ msg }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+{% endwith %}
+
 <div class="card row" style="align-items:center;">
   <span class="badge {{ 'live' if d.is_live else ('testnet' if 'DRY_RUN' not in d.mode else 'dryrun') }}">{{ d.mode }}</span>
   {% if d.heartbeat_stale %}
@@ -310,6 +379,50 @@ _TEMPLATE = """
       {% endif %}
     </div>
   </div>
+</div>
+
+<h2>策略参数(在线修改,不需要重启,只影响下一笔新开仓 / 下一轮盯仓检查)</h2>
+<div class="card table-wrap">
+  <div class="sub" style="margin-bottom:10px;">已经持有的仓位不会被追溯修改——已经记录的止盈止损价位维持原样,只有新开的仓位、以及阶梯止盈往下一档推进时,才会用这里最新的参数。</div>
+  {% for group in d.setting_groups %}
+  <div style="margin-bottom:20px;">
+    <div class="stat-label" style="margin-bottom:6px;">{{ group.name }}</div>
+    <table>
+      {% for row in group.rows %}
+      <tr>
+        <td style="white-space:normal; min-width:200px;">
+          {{ row.label }}
+          {% if row.overridden %}<span class="badge warn">已覆盖</span>{% endif %}
+        </td>
+        <td>
+          <form class="inline-form" method="post" action="{{ url_for('set_setting') }}">
+            <input type="hidden" name="field" value="{{ row.field }}">
+            {% if row.input_type == 'bool' %}
+            <select name="value">
+              <option value="true" {{ 'selected' if row.value else '' }}>开启</option>
+              <option value="false" {{ 'selected' if not row.value else '' }}>关闭</option>
+            </select>
+            {% else %}
+            <input type="text" name="value" value="{{ row.value }}" style="width:110px;">
+            {% endif %}
+            <button type="submit">保存</button>
+          </form>
+        </td>
+        <td>
+          {% if row.overridden %}
+          <form method="post" action="{{ url_for('clear_setting') }}">
+            <input type="hidden" name="field" value="{{ row.field }}">
+            <button type="submit" class="btn-danger">恢复默认({{ row.default }})</button>
+          </form>
+          {% else %}
+          <span class="sub">.env 默认值</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endfor %}
 </div>
 
 <h2>当前持仓({{ d.open_count }} / {{ d.settings.max_concurrent_positions }})</h2>
@@ -493,6 +606,34 @@ def remove_blacklist():
     if symbol.strip():
         ControlStore().remove_from_blacklist(symbol)
         log.info("面板操作: 移除黑名单 %s", symbol.strip())
+    return redirect(url_for("index"))
+
+
+@app.route("/control/settings/set", methods=["POST"])
+@require_auth
+def set_setting():
+    field = request.form.get("field", "")
+    value = request.form.get("value", "")
+    if field not in OVERRIDABLE_FIELDS:
+        flash(f"{field} 不是允许修改的参数", "error")
+        return redirect(url_for("index"))
+    try:
+        ControlStore().set_setting_override(field, value, _settings)
+        log.info("面板操作: 覆盖参数 %s = %s", field, value)
+        flash(f"{field} 已更新为 {value},下一次开仓/盯仓检查即可生效", "ok")
+    except ValueError as exc:
+        flash(f"{field} 修改失败: {exc}", "error")
+    return redirect(url_for("index"))
+
+
+@app.route("/control/settings/clear", methods=["POST"])
+@require_auth
+def clear_setting():
+    field = request.form.get("field", "")
+    if field in OVERRIDABLE_FIELDS:
+        ControlStore().clear_setting_override(field)
+        log.info("面板操作: 恢复默认参数 %s", field)
+        flash(f"{field} 已恢复 .env 默认值", "ok")
     return redirect(url_for("index"))
 
 
