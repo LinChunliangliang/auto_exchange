@@ -4,7 +4,7 @@ from typing import Optional
 from config import Settings
 from exchange.base import Exchange, RateLimitedError
 from logger import get_logger
-from risk import compute_entry_quantity, compute_margin
+from risk import compute_entry_quantity, compute_margin_from_qty
 from signal_client import to_exchange_symbol
 from state_store import StateStore
 
@@ -60,11 +60,30 @@ def enter_position(exchange: Exchange, sig: dict, settings: Settings, state: Sta
             log.warning("无法获取 %s 标记价格,跳过", symbol)
             return
 
-        atr = None
+        # ATR 止损:止损空间跟着这个品种"最近实际波动有多大"走,不是所有品种一刀切
+        # 用同一个固定百分比,而且**不设上限**——真正波动大的品种,止损空间就应该更宽,
+        # 不是卡在一个固定数字上(那样跟没用 ATR 没区别)。只留一个下限
+        # ATR_MIN_STOP_PCT,避免波动率异常低时止损贴得太近、随便一个噪音就触发,
+        # 顺带也避免下面按风险金额反推仓位时,因为止损空间趋近于 0 而算出离谱大的仓位。
+        # 止损空间必须在这里(下单/算仓位之前)就确定,因为仓位大小现在是反过来
+        # 按"这笔止损空间对应的目标风险金额"算出来的,不是止损空间算完仓位的
+        stop_loss_pct = settings.stop_loss_pct
         if settings.atr_stop_loss_enabled:
             atr = exchange.get_atr(symbol, settings.atr_period, settings.atr_interval)
             if atr is None:
                 log.info("%s 查不到 ATR 数据,这次开仓退回固定百分比止损(%.2f%%)", symbol, settings.stop_loss_pct * 100)
+            else:
+                atr_pct = atr / mark_price
+                stop_loss_pct = max(settings.atr_min_stop_pct, atr_pct * settings.atr_multiplier)
+                log.info(
+                    "%s ATR=%.6f(%.3f%%) x%.1f 倍 -> 止损空间=%.3f%%(下限%.2f%%,无上限)",
+                    symbol,
+                    atr,
+                    atr_pct * 100,
+                    settings.atr_multiplier,
+                    stop_loss_pct * 100,
+                    settings.atr_min_stop_pct * 100,
+                )
     except RateLimitedError as exc:
         log.warning("评估信号 %s 时被交易所限流,跳过本次信号: %s", symbol, exc)
         return
@@ -72,7 +91,9 @@ def enter_position(exchange: Exchange, sig: dict, settings: Settings, state: Sta
         log.exception("评估信号 %s 时查询交易所信息出错,跳过本次信号", symbol)
         return
 
-    qty = compute_entry_quantity(mark_price, balance, settings)
+    # 仓位数量按"这笔止损空间对应的目标风险金额"反推,止损越宽仓位越小,止损越窄
+    # 仓位越大——保证不管止损空间怎么变,真止损的时候亏掉的绝对金额基本恒定
+    qty = compute_entry_quantity(mark_price, balance, stop_loss_pct, settings)
     if qty * mark_price < filters.min_notional:
         log.warning(
             "%s 计算出的名义价值 %.2f 低于交易所最小限制 %.2f,跳过",
@@ -90,27 +111,6 @@ def enter_position(exchange: Exchange, sig: dict, settings: Settings, state: Sta
         return
 
     entry_price = order.avg_price
-
-    # ATR 止损:止损空间跟着这个品种"最近实际波动有多大"走,不是所有品种一刀切用
-    # 同一个固定百分比。ATR(价格单位)换算成相对 entry_price 的百分比,再夹到
-    # [ATR_MIN_STOP_PCT, STOP_LOSS_PCT] 之间——下限避免波动率异常低时止损贴得太近
-    # (随便一个噪音就触发),上限就是原来的 STOP_LOSS_PCT,避免波动率异常高的品种
-    # 算出一个大到离谱的止损空间。查不到 ATR 就直接退回固定百分比。
-    stop_loss_pct = settings.stop_loss_pct
-    if atr is not None and entry_price > 0:
-        atr_pct = atr / entry_price
-        clamped_pct = max(settings.atr_min_stop_pct, min(atr_pct * settings.atr_multiplier, settings.stop_loss_pct))
-        log.info(
-            "%s ATR=%.6f(%.3f%%) x%.1f 倍 -> 夹到 [%.2f%%, %.2f%%] 区间后止损空间=%.3f%%",
-            symbol,
-            atr,
-            atr_pct * 100,
-            settings.atr_multiplier,
-            settings.atr_min_stop_pct * 100,
-            settings.stop_loss_pct * 100,
-            clamped_pct * 100,
-        )
-        stop_loss_pct = clamped_pct
 
     if direction == "long":
         tp_price = entry_price * (1 + settings.take_profit_pct)
@@ -136,17 +136,18 @@ def enter_position(exchange: Exchange, sig: dict, settings: Settings, state: Sta
             "ladder_level": 0,
         },
     )
+    margin = compute_margin_from_qty(order.executed_qty, entry_price, settings)
     log.info(
-        "开仓成功 %s %s qty=%s entry=%.6f tp=%.6f sl=%.6f margin=%.2fUSDT(余额%.2f的%.1f%%) (score=%s)",
+        "开仓成功 %s %s qty=%s entry=%.6f tp=%.6f sl=%.6f(空间%.3f%%) margin=%.2fUSDT 目标风险=%.2fUSDT (score=%s)",
         symbol,
         direction,
         order.executed_qty,
         entry_price,
         tp_price,
         sl_price,
-        compute_margin(balance, settings),
-        balance,
-        settings.position_size_pct * 100,
+        stop_loss_pct * 100,
+        margin,
+        margin * settings.leverage * stop_loss_pct,
         sig.get("score"),
     )
 

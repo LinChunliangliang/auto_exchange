@@ -366,11 +366,11 @@ _TEMPLATE = """
     <tr><th>盯仓间隔</th><td>{{ d.settings.position_monitor_interval_seconds }} 秒</td></tr>
     <tr><th>信号新鲜度上限</th><td>{{ d.settings.max_signal_age_seconds }} 秒</td></tr>
     <tr><th>杠杆</th><td>{{ d.settings.leverage }}x</td></tr>
-    <tr><th>每笔保证金</th><td>账户余额 × {{ '%.1f%%'|format(d.settings.position_size_pct * 100) }}</td></tr>
+    <tr><th>每笔目标风险金额</th><td>账户余额 × {{ '%.1f%%'|format(d.settings.position_size_pct * 100) }} × {{ d.settings.leverage }}倍杠杆 × {{ '%.2f%%'|format(d.settings.stop_loss_pct * 100) }}(仓位数量由此反推,止损空间越宽仓位越小)</td></tr>
     <tr><th>止盈 / 止损</th><td>{{ '%.2f%%'|format(d.settings.take_profit_pct * 100) }} / {{ '%.2f%%'|format(d.settings.stop_loss_pct * 100) }}</td></tr>
     <tr><th>ATR 动态止损</th><td>
       {% if d.settings.atr_stop_loss_enabled %}
-        开启:ATR({{ d.settings.atr_period }},{{ d.settings.atr_interval }}) × {{ d.settings.atr_multiplier }},夹在 [{{ '%.2f%%'|format(d.settings.atr_min_stop_pct * 100) }}, {{ '%.2f%%'|format(d.settings.stop_loss_pct * 100) }}]
+        开启:ATR({{ d.settings.atr_period }},{{ d.settings.atr_interval }}) × {{ d.settings.atr_multiplier }},下限 {{ '%.2f%%'|format(d.settings.atr_min_stop_pct * 100) }},无上限
       {% else %}
         关闭(统一用固定的 {{ '%.2f%%'|format(d.settings.stop_loss_pct * 100) }})
       {% endif %}

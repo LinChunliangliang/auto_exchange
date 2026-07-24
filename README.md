@@ -9,10 +9,10 @@ YBRadar 信号驱动的币安合约自动交易机器人。
   - 当前处于强信号窗口(`strongState=active`)
   - 方向明确(`recDir=long/short`,排除观望)
   - 信号足够新鲜(`strongSince` 距离现在不超过 `MAX_SIGNAL_AGE_SECONDS`,避免追一个已经走完的行情)
-- 命中就在币安 USDⓈ-M 合约按配置的保证金 × 杠杆开市价单
+- 命中就开市价单,**仓位数量按目标风险金额反推**(不是固定保证金):目标风险金额 = 账户余额 × `POSITION_SIZE_PCT` × `LEVERAGE` × `STOP_LOSS_PCT`,仓位数量 = 目标风险金额 ÷ (价格 × 这笔交易实际用的止损百分比)——止损空间越宽仓位越小,止损空间越窄仓位越大,不管哪个品种止损空间差多少,真止损时亏掉的绝对金额基本恒定
 - 开仓后**不依赖交易所条件单**:实测这个账号的 `STOP_MARKET`/`TAKE_PROFIT_MARKET` 委托会被交易所拒绝(错误码 -4120),所以止盈止损改成机器人自己每隔 `POSITION_MONITOR_INTERVAL_SECONDS` 盯盘一次标记价格,触发阈值就发市价单平仓——盯仓和拉信号是两个独立的节奏,前者查币安自己的 API 可以很快,后者要顾及第三方网站的压力
 - 止盈/止损阈值按**币本位涨跌幅**计算(`entry_price` 直接乘百分比),不受杠杆影响
-- **可选的 ATR 动态止损**(`ATR_STOP_LOSS_ENABLED`,默认关闭):开仓时拉最近K线算 ATR(平均真实波幅),把止损空间换算成"这个品种最近实际波动有多大",夹在 `[ATR_MIN_STOP_PCT, STOP_LOSS_PCT]` 之间,而不是所有品种一刀切用同一个固定百分比;查不到K线数据自动退回固定的 `STOP_LOSS_PCT`
+- **可选的 ATR 动态止损**(`ATR_STOP_LOSS_ENABLED`,默认关闭):开仓时拉最近K线算 ATR(平均真实波幅),把止损空间换算成"这个品种最近实际波动有多大",下限是 `ATR_MIN_STOP_PCT`、**没有上限**(真正波动大的品种止损空间可以明显超过 `STOP_LOSS_PCT`,风险交给上面的仓位联动机制兜底,不是死卡止损空间的大小);查不到K线数据自动退回固定的 `STOP_LOSS_PCT`
 - **没有"亏损也强平"的超时逻辑**:亏损或持平的仓位不会因为拿久了就被强平,一直等到止盈/止损线——"舔一口就跑"指的是拿到正确收益才走,不是拿够时间就走
 - **但持仓超过 `PROFIT_LOCK_AFTER_SECONDS` 且浮盈超过 `PROFIT_LOCK_MIN_PCT` 会锁定收益提前平仓**:持仓太久说明预期的快速突破大概率已经落空,继续拖着只是在赌反转不会发生;必须超过最小浮盈门槛才触发(市价单平仓有真实的手续费+滑点成本,浮盈太薄的话锁盈这个动作本身执行完反而会变成亏损),不影响亏损/持平的仓位
 - **可选的阶梯止盈**(`LADDER_TAKE_PROFIT_ENABLED`,默认关闭):碰到止盈线不是一次性全平,而是分批止盈——第1档平掉大部分仓位并把止损上移到保本附近,后面每再往有利方向走一个 `TAKE_PROFIT_PCT` 就把剩余仓位再平一半,最多加到 `LADDER_MAX_LEVELS` 档封顶,剩下的尾巴交给保本止损/超时锁盈处理。每一档都是真实的部分平仓,单独记一笔成交记录
@@ -68,10 +68,10 @@ PYTHONPATH=src python src/main.py
 | `BINANCE_API_KEY` / `BINANCE_API_SECRET` | 币安合约 API 密钥(建议只开交易权限,不开提现权限,并绑定服务器 IP 白名单) |
 | `BINANCE_TESTNET` | `true` = 测试网假资金;`false` = 实盘真实资金 |
 | `ALLOW_TRADIFI_PERPETUALS` | 是否交易美股/大宗商品代币化合约(NVDA、TSLA、XAU 这类)。默认 `false`;需要先在币安网页/APP 签过 TradFi-Perps 协议才能改成 `true`,而且这套策略的信号打分是针对加密货币调的,美股品种的信号质量没验证过,交易时段也跟随美股,建议先小范围观察 |
-| `POSITION_SIZE_PCT` | 每笔保证金 = 账户可用余额 × 这个百分比(小数,0.05 = 5%),每次开仓前实时查余额计算,不是固定金额,名义仓位 = 保证金 × `LEVERAGE` |
+| `POSITION_SIZE_PCT` | 跟 `LEVERAGE`、`STOP_LOSS_PCT` 一起决定每笔交易的目标风险金额(账户余额 × 这个百分比 × 杠杆 × `STOP_LOSS_PCT`),仓位数量由此反推,不是固定保证金。每次开仓前实时查余额计算 |
 | `DRY_RUN_BALANCE_USDT` | 仅 `DRY_RUN=true` 时用到,模拟账户没有真实余额,用这个固定值当参考余额 |
 | `LEVERAGE` | 杠杆倍数 |
-| `TAKE_PROFIT_PCT` / `STOP_LOSS_PCT` | 止盈/止损百分比,按币价格涨跌幅计算,不受杠杆影响。开启 ATR 止损时,`STOP_LOSS_PCT` 变成止损空间的上限 |
+| `TAKE_PROFIT_PCT` / `STOP_LOSS_PCT` | 止盈百分比 / 止损百分比,按币价格涨跌幅计算,不受杠杆影响。开启 ATR 止损后 `STOP_LOSS_PCT` 不再是止损上限,变成"目标风险金额"的校准基准 |
 | `ATR_STOP_LOSS_ENABLED` | 是否用 ATR(平均真实波幅)动态计算止损空间,默认 `false` |
 | `ATR_PERIOD` / `ATR_INTERVAL` | 算 ATR 用几根K线 / K线的时间粒度(如 `5m`) |
 | `ATR_MULTIPLIER` | ATR 乘这个系数作为止损空间,常见取值 1.5 左右 |
