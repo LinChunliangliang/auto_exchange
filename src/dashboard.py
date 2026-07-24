@@ -4,9 +4,10 @@ from datetime import datetime
 from functools import wraps
 from zoneinfo import ZoneInfo
 
-from flask import Flask, Response, render_template_string, request
+from flask import Flask, Response, redirect, render_template_string, request, url_for
 
 from config import Settings, load_settings
+from control_store import ControlStore
 from exchange.base import Exchange
 from logger import get_logger
 from main import build_exchange
@@ -144,6 +145,8 @@ def _build_view_data() -> dict:
 
     today_pnl = state.get_today_pnl()
 
+    control = ControlStore()
+
     try:
         balance = _exchange.get_account_balance()
     except Exception:
@@ -174,6 +177,8 @@ def _build_view_data() -> dict:
             else 0
         ),
         "circuit_breaker_tripped": bool(daily_loss_limit_usdt) and today_pnl <= -abs(daily_loss_limit_usdt),
+        "trading_enabled": control.is_trading_enabled(),
+        "blacklist": control.get_blacklist(),
         "settings": _settings,
         "generated_at": _fmt_ts(now),
     }
@@ -226,6 +231,24 @@ _TEMPLATE = """
   .stat-value { font-size: 18px; font-weight: 600; }
   .table-wrap { overflow-x: auto; }
   footer { color: #5a6472; font-size: 11px; margin-top: 24px; text-align: center; }
+  button {
+    font: inherit; cursor: pointer; border: none; border-radius: 6px;
+    padding: 8px 16px; font-weight: 600;
+  }
+  .btn-pause { background: #4a3a14; color: #ffcf70; }
+  .btn-resume { background: #143a1e; color: #6fd88a; }
+  .btn-danger { background: #4a1414; color: #ff8080; }
+  input[type=text] {
+    font: inherit; background: #0f1115; color: #e6e6e6; border: 1px solid #262b36;
+    border-radius: 6px; padding: 8px 10px;
+  }
+  .inline-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .tag-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .tag {
+    display: flex; align-items: center; gap: 6px; background: #1b2a42; color: #7fb2ff;
+    border-radius: 999px; padding: 4px 6px 4px 12px; font-size: 13px;
+  }
+  .tag button { padding: 2px 8px; border-radius: 999px; background: #4a1414; color: #ff8080; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -246,7 +269,47 @@ _TEMPLATE = """
   {% if d.circuit_breaker_tripped %}
     <span class="badge bad">⚠ 当日亏损熔断已触发,已停止开新仓</span>
   {% endif %}
+  {% if not d.trading_enabled %}
+    <span class="badge bad">⏸ 面板已暂停开仓(已有持仓的止盈止损仍正常监控)</span>
+  {% endif %}
   <span class="sub">启动于 {{ d.started_at_fmt }}</span>
+</div>
+
+<h2>开仓控制</h2>
+<div class="card">
+  <div class="row" style="align-items:center;">
+    <form class="inline-form" method="post" action="{{ url_for('toggle_trading') }}">
+      {% if d.trading_enabled %}
+        <button class="btn-pause" type="submit">⏸ 暂停开新仓</button>
+        <span class="sub">当前:允许开仓</span>
+      {% else %}
+        <button class="btn-resume" type="submit">▶ 恢复开新仓</button>
+        <span class="sub">当前:已暂停(不影响已有持仓的止盈止损)</span>
+      {% endif %}
+    </form>
+  </div>
+
+  <div style="margin-top:16px;">
+    <div class="stat-label">币种黑名单(命中的信号不会开仓,不影响已有持仓)</div>
+    <form class="inline-form" method="post" action="{{ url_for('add_blacklist') }}" style="margin-top:8px;">
+      <input type="text" name="symbol" placeholder="比如 RIF 或 RIFUSDT" required>
+      <button class="btn-danger" type="submit">加入黑名单</button>
+    </form>
+    <div class="tag-list">
+      {% for symbol in d.blacklist %}
+      <span class="tag">
+        {{ symbol }}
+        <form method="post" action="{{ url_for('remove_blacklist') }}" style="display:inline;">
+          <input type="hidden" name="symbol" value="{{ symbol }}">
+          <button type="submit">移除</button>
+        </form>
+      </span>
+      {% endfor %}
+      {% if not d.blacklist %}
+      <span class="empty">黑名单为空</span>
+      {% endif %}
+    </div>
+  </div>
 </div>
 
 <h2>当前持仓({{ d.open_count }} / {{ d.settings.max_concurrent_positions }})</h2>
@@ -390,7 +453,7 @@ _TEMPLATE = """
   </table>
 </div>
 
-<footer>auto_ex dashboard · 只读展示,不提供任何操作入口</footer>
+<footer>auto_ex dashboard · 仅可暂停/恢复开仓和管理黑名单,不能下单或平仓</footer>
 
 </body>
 </html>
@@ -401,6 +464,36 @@ _TEMPLATE = """
 @require_auth
 def index():
     return render_template_string(_TEMPLATE, d=_build_view_data())
+
+
+@app.route("/control/trading/toggle", methods=["POST"])
+@require_auth
+def toggle_trading():
+    control = ControlStore()
+    new_state = not control.is_trading_enabled()
+    control.set_trading_enabled(new_state)
+    log.info("面板操作: %s开仓", "恢复" if new_state else "暂停")
+    return redirect(url_for("index"))
+
+
+@app.route("/control/blacklist/add", methods=["POST"])
+@require_auth
+def add_blacklist():
+    symbol = request.form.get("symbol", "")
+    if symbol.strip():
+        ControlStore().add_to_blacklist(symbol)
+        log.info("面板操作: 拉黑币种 %s", symbol.strip())
+    return redirect(url_for("index"))
+
+
+@app.route("/control/blacklist/remove", methods=["POST"])
+@require_auth
+def remove_blacklist():
+    symbol = request.form.get("symbol", "")
+    if symbol.strip():
+        ControlStore().remove_from_blacklist(symbol)
+        log.info("面板操作: 移除黑名单 %s", symbol.strip())
+    return redirect(url_for("index"))
 
 
 def run() -> None:
