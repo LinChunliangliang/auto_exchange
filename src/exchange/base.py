@@ -72,3 +72,9 @@ class Exchange(ABC):
         用来给"不是机器人自己平的仓"(手动平仓/爆仓)拿到准确数字,而不是靠标记价格
         估算。查不到/该交易所不支持这个查询就返回 None,调用方会退回到估算兜底。"""
         return None
+
+    def get_atr(self, symbol: str, period: int, interval: str) -> Optional[float]:
+        """返回该品种的 ATR(平均真实波幅,价格单位,不是百分比),用来把止损空间
+        跟这个品种"当前实际波动有多大"挂钩,而不是所有品种统一用一个固定百分比。
+        查不到/该交易所不支持就返回 None,调用方会退回到固定百分比止损兜底。"""
+        return None

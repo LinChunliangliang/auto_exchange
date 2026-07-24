@@ -44,6 +44,11 @@ class Settings:
     leverage: int
     take_profit_pct: float
     stop_loss_pct: float
+    atr_stop_loss_enabled: bool
+    atr_period: int
+    atr_interval: str
+    atr_multiplier: float
+    atr_min_stop_pct: float
     profit_lock_after_seconds: int
     profit_lock_min_pct: float
     ladder_take_profit_enabled: bool
@@ -78,6 +83,11 @@ def load_settings() -> Settings:
         leverage=_int("LEVERAGE", 2),
         take_profit_pct=_float("TAKE_PROFIT_PCT", 0.015),
         stop_loss_pct=_float("STOP_LOSS_PCT", 0.01),
+        atr_stop_loss_enabled=_bool("ATR_STOP_LOSS_ENABLED", False),
+        atr_period=_int("ATR_PERIOD", 14),
+        atr_interval=os.getenv("ATR_INTERVAL", "5m"),
+        atr_multiplier=_float("ATR_MULTIPLIER", 1.5),
+        atr_min_stop_pct=_float("ATR_MIN_STOP_PCT", 0.005),
         profit_lock_after_seconds=_int("PROFIT_LOCK_AFTER_SECONDS", 600),
         profit_lock_min_pct=_float("PROFIT_LOCK_MIN_PCT", 0.003),
         ladder_take_profit_enabled=_bool("LADDER_TAKE_PROFIT_ENABLED", False),
@@ -108,5 +118,11 @@ def load_settings() -> Settings:
 
     if not (0 < settings.ladder_first_close_pct <= 1) or not (0 < settings.ladder_step_close_pct <= 1):
         raise RuntimeError("LADDER_FIRST_CLOSE_PCT / LADDER_STEP_CLOSE_PCT 必须是 0~1 之间的小数")
+
+    if settings.atr_min_stop_pct > settings.stop_loss_pct:
+        raise RuntimeError(
+            "ATR_MIN_STOP_PCT 不能比 STOP_LOSS_PCT 还大——STOP_LOSS_PCT 在 ATR 止损模式下"
+            "是止损空间的上限,ATR_MIN_STOP_PCT 是下限,下限不能超过上限"
+        )
 
     return settings

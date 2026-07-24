@@ -28,6 +28,9 @@ class DryRunExchange(Exchange):
     def get_mark_price(self, symbol: str) -> Optional[float]:
         return self._public.get_mark_price(symbol)
 
+    def get_atr(self, symbol: str, period: int, interval: str) -> Optional[float]:
+        return self._public.get_atr(symbol, period, interval)
+
     def get_account_balance(self, asset: str = "USDT") -> float:
         return self._balance_usdt
 

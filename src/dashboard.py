@@ -108,6 +108,7 @@ def _build_view_data() -> dict:
                 "held_for": _fmt_duration(now - pos["opened_at"]),
                 "signal_score": pos.get("signal_score"),
                 "ladder_level": pos.get("ladder_level", 0),
+                "stop_loss_pct_used": pos.get("stop_loss_pct_used"),
             }
         )
 
@@ -260,7 +261,7 @@ _TEMPLATE = """
       <td>{{ '%.6f'|format(p.entry_price) }}</td>
       <td>{{ '%.6f'|format(p.mark_price) if p.mark_price is not none else '查询失败' }}</td>
       <td>{{ '已封顶' if p.tp_capped else '%.6f'|format(p.tp_price) }}</td>
-      <td>{{ '%.6f'|format(p.sl_price) }}</td>
+      <td>{{ '%.6f'|format(p.sl_price) }}{% if p.stop_loss_pct_used is not none %} <span class="sub">({{ '%.2f%%'|format(p.stop_loss_pct_used * 100) }})</span>{% endif %}</td>
       <td>{{ '第%d档'|format(p.ladder_level) if p.ladder_level else '-' }}</td>
       <td>{{ '%.2f'|format(p.notional) }} USDT</td>
       <td>{{ p.held_for }}</td>
@@ -367,6 +368,13 @@ _TEMPLATE = """
     <tr><th>杠杆</th><td>{{ d.settings.leverage }}x</td></tr>
     <tr><th>每笔保证金</th><td>账户余额 × {{ '%.1f%%'|format(d.settings.position_size_pct * 100) }}</td></tr>
     <tr><th>止盈 / 止损</th><td>{{ '%.2f%%'|format(d.settings.take_profit_pct * 100) }} / {{ '%.2f%%'|format(d.settings.stop_loss_pct * 100) }}</td></tr>
+    <tr><th>ATR 动态止损</th><td>
+      {% if d.settings.atr_stop_loss_enabled %}
+        开启:ATR({{ d.settings.atr_period }},{{ d.settings.atr_interval }}) × {{ d.settings.atr_multiplier }},夹在 [{{ '%.2f%%'|format(d.settings.atr_min_stop_pct * 100) }}, {{ '%.2f%%'|format(d.settings.stop_loss_pct * 100) }}]
+      {% else %}
+        关闭(统一用固定的 {{ '%.2f%%'|format(d.settings.stop_loss_pct * 100) }})
+      {% endif %}
+    </td></tr>
     <tr><th>超时锁盈阈值</th><td>{{ d.settings.profit_lock_after_seconds }} 秒,浮盈超过 {{ '%.2f%%'|format(d.settings.profit_lock_min_pct * 100) }} 才触发</td></tr>
     <tr><th>阶梯止盈</th><td>
       {% if d.settings.ladder_take_profit_enabled %}

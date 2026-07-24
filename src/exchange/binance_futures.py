@@ -238,3 +238,29 @@ class BinanceFutures(Exchange):
             log.exception("查询 %s 真实已实现盈亏失败,调用方会退回到标记价格估算", symbol)
             return None
         return sum(float(entry["income"]) for entry in data)
+
+    def get_atr(self, symbol: str, period: int, interval: str) -> Optional[float]:
+        # K线接口不需要签名(公开数据)。多拉 2 根:最后一根可能还没走完(不完整),
+        # 直接丢弃,剩下的 period+1 根收盘K线才够算 period 个真实波幅(TR)。
+        try:
+            klines = self._request(
+                "GET", "/fapi/v1/klines", {"symbol": symbol, "interval": interval, "limit": period + 2}
+            )
+        except Exception:
+            log.exception("查询 %s K线数据失败,ATR 止损退回固定百分比兜底", symbol)
+            return None
+
+        closed = klines[:-1]  # 最后一根是当前还在走的K线,丢弃
+        if len(closed) < period + 1:
+            log.warning("%s K线数据不够算 ATR(%d)(只有%d根收盘K线),退回固定百分比兜底", symbol, period, len(closed))
+            return None
+
+        closed = closed[-(period + 1):]
+        true_ranges = []
+        for i in range(1, len(closed)):
+            high = float(closed[i][2])
+            low = float(closed[i][3])
+            prev_close = float(closed[i - 1][4])
+            true_ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+
+        return sum(true_ranges) / len(true_ranges)
