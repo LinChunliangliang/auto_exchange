@@ -33,7 +33,7 @@ def fetch_mfe(exchange: BinanceFutures, symbol: str, side: str, entry_time: floa
         if not window_klines:
             result[label] = None
             continue
-        if side == "LONG":
+        if side.upper() == "LONG":
             best = max(float(k[2]) for k in window_klines)  # high
             result[label] = (best - entry_price) / entry_price * 100
         else:
@@ -74,7 +74,7 @@ def main():
         total_pnl += pnl
         if pnl > 0:
             wins += 1
-        captured_pct = (exit_p - entry) / entry * 100 * (1 if side == "LONG" else -1)
+        captured_pct = (exit_p - entry) / entry * 100 * (1 if side.upper() == "LONG" else -1)
 
         mfe = fetch_mfe(exchange, symbol, side, t["opened_at"], entry)
         if "error" in mfe:
